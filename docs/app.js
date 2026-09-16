@@ -434,8 +434,10 @@ function setStatus(cls, text) {
   $('#ws-text').textContent = text;
 }
 
+const WS_MAX_FAILS = 6;   // after this, stop dialling a number that never answers
+
 function connect() {
-  setStatus('pill-off', 'connecting…');
+  if ((state.wsFails || 0) < 3) setStatus('pill-off', 'connecting…');
   try { ws = new WebSocket(WS_URL); } catch { return retry(); }
 
   ws.onopen = () => {
@@ -485,6 +487,13 @@ function retry() {
   }
   if (state.wsFails < 3) {
     setStatus('pill-err', `reconnecting in ${Math.round(backoff / 1000)}s`);
+  }
+  if (state.wsFails >= WS_MAX_FAILS) {
+    // Give up rather than retry indefinitely. If DNS for the zone is
+    // sinkholed it will not recover on a backoff timer, and each attempt is
+    // another console error for no benefit.
+    setStatus('pill-err', 'direct feed unavailable');
+    return;
   }
   setTimeout(connect, backoff);
   // There is no resume cursor on this socket — a reconnect is a fresh start and
