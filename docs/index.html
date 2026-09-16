@@ -27,7 +27,8 @@
 
 <nav class="tabs" role="tablist">
   <button class="tab active" data-tab="board" role="tab">Whale board</button>
-  <button class="tab" data-tab="tape" role="tab">Live tape</button>
+  <button class="tab" data-tab="trades" role="tab">Whale trades</button>
+  <button class="tab" data-tab="tape" role="tab">Live tape (direct)</button>
   <button class="tab" data-tab="method" role="tab">Method</button>
 </nav>
 
@@ -88,9 +89,56 @@
   </div>
 </section>
 
+<!-- ─────────────────────────────── WHALE TRADES ──────────────────────────── -->
+<section id="panel-trades" class="panel" hidden>
+  <div class="callout small">
+    <strong>Recent fills by wallets that passed the screen</strong> — candidates,
+    watch-list and fragile only. Market makers and one-bet wallets are excluded,
+    so this is not a firehose.
+    Collected <b>server-side by the scheduled job</b>, which is why it works even
+    when your own network cannot reach Polymarket. REST is CDN-cached
+    <code>max-age=300</code>, so fills can be up to ~5 minutes behind.
+    <span id="trades-meta"></span>
+  </div>
+
+  <div class="toolbar">
+    <label>Verdict
+      <select id="t-verdict">
+        <option value="">candidates + watch + fragile</option>
+        <option value="CANDIDATE">CANDIDATE only</option>
+        <option value="WATCH">WATCH only</option>
+        <option value="FRAGILE">FRAGILE only</option>
+      </select>
+    </label>
+    <label>Min size $
+      <input type="number" id="t-min" value="0" min="0" step="50">
+    </label>
+    <label class="chk"><input type="checkbox" id="t-disc"> off-leaderboard whales only</label>
+    <span class="spacer"></span>
+    <span id="trades-count" class="count"></span>
+  </div>
+
+  <div class="tablewrap">
+    <table id="trades">
+      <thead><tr>
+        <th>When</th><th>Trader</th><th>Verdict</th><th>Side</th>
+        <th class="num">Size $</th><th class="num">Price</th>
+        <th>Outcome</th><th>Market</th>
+      </tr></thead>
+      <tbody id="trades-body"></tbody>
+    </table>
+    <p id="trades-empty" class="empty">Loading…</p>
+  </div>
+</section>
+
 <!-- ────────────────────────────────── TAPE ───────────────────────────────── -->
 <section id="panel-tape" class="panel" hidden>
   <div class="callout small">
+    <strong>This tab connects from YOUR browser, directly to Polymarket.</strong>
+    If your network sinkholes the <code>polymarket.com</code> DNS zone (as several
+    Indian ISPs now do — every hostname resolving to one unreachable address),
+    this tab cannot work and the <b>Whale trades</b> tab is the one to use.
+    <br><br>
     Live, unauthenticated feed from <code>wss://ws-live-data.polymarket.com</code>
     — every fill on the platform, no per-market subscription.
     <b>Measured over 46s: 28.5 fills/sec, median fill <code>$2.40</code>, p90
@@ -108,6 +156,7 @@
     </label>
     <label class="chk"><input type="checkbox" id="f-crypto" checked> hide 5-min crypto churn</label>
     <label class="chk"><input type="checkbox" id="f-tracked"> tracked wallets only</label>
+    <label class="chk"><input type="checkbox" id="f-best"> best whales only (cand/watch)</label>
     <label class="chk"><input type="checkbox" id="f-alert"> 🔔 notify on tracked</label>
     <span class="spacer"></span>
     <button id="pause" class="btn">Pause</button>

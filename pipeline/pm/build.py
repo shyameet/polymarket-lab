@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 from . import api
+from .feed import build_feed
 from .score import score_wallet
 
 # Addresses that are protocol infrastructure, not traders. They surface in
@@ -129,6 +130,8 @@ def main() -> int:
     ap.add_argument("--no-discover", action="store_true")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap wallets scored (for quick local runs)")
+    ap.add_argument("--no-feed", action="store_true",
+                    help="skip the screened-whale trade feed")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -189,6 +192,16 @@ def main() -> int:
     }
 
     _write(os.path.join(args.out, "whales.json"), ordered)
+
+    # The trade feed has to be built HERE, on the runner, rather than in the
+    # visitor's browser -- see feed.py for why (sinkholed DNS on some networks).
+    if not args.no_feed:
+        feed = build_feed(ordered, workers=args.workers, log=log)
+        feed["generated_at"] = now_ts
+        meta["feed_trades"] = len(feed["trades"])
+        meta["feed_newest_ts"] = feed["newest_ts"]
+        _write(os.path.join(args.out, "whale_trades.json"), feed)
+
     _write(os.path.join(args.out, "meta.json"), meta)
 
     log(f"\n== wrote {len(ordered)} scorecards to {args.out} "

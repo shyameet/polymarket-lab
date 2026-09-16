@@ -7,9 +7,10 @@ name: Refresh whale scorecards
 
 on:
   schedule:
-    # Hourly. The underlying REST data is CDN-cached for 5 minutes anyway, so
-    # there is nothing to gain from running this more often.
-    - cron: '17 * * * *'
+    # Every 15 minutes. The scorecards barely move at that cadence, but the
+    # screened-whale trade feed does -- and for visitors whose own network
+    # cannot reach Polymarket, this job IS their live feed.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       top:
@@ -61,6 +62,10 @@ jobs:
           assert len(w) >= 50, f'only {len(w)} wallets scored -- refusing to publish'
           assert m['rankable'] >= 10, f"only {m['rankable']} rankable"
           assert any(c['verdict'] != 'INSUFFICIENT' for c in w), 'all insufficient'
+          import os
+          if os.path.exists('docs/data/whale_trades.json'):
+              f = json.load(open('docs/data/whale_trades.json', encoding='utf-8'))
+              print(f"feed: {len(f['trades'])} fills from {f['whales']} screened whales")
           print(f"OK: {len(w)} wallets, {m['rankable']} rankable, {m['verdicts']}")
           PY
 

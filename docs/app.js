@@ -28,6 +28,8 @@ const state = {
   tape: [],
   stamps: [],
   notified: new Set(),
+  feed: [],
+  wsFails: 0,
 };
 
 /* ───────────────────────────── formatting ───────────────────────────── */
@@ -53,10 +55,13 @@ const signClass = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'mut');
 
 async function loadData() {
   try {
-    const [w, m] = await Promise.all([
+    const [w, m, f] = await Promise.all([
       fetch('data/whales.json', { cache: 'no-cache' }).then((r) => r.json()),
       fetch('data/meta.json', { cache: 'no-cache' }).then((r) => r.json()).catch(() => null),
+      fetch('data/whale_trades.json', { cache: 'no-cache' }).then((r) => r.json())
+        .catch(() => null),
     ]);
+    state.feed = f?.trades || [];
     state.whales = Array.isArray(w) ? w : [];
     state.whales.forEach((c) => state.byWallet.set((c.wallet || '').toLowerCase(), c));
 
@@ -76,6 +81,7 @@ async function loadData() {
         `${v.INSUFFICIENT || 0} insufficient history.`;
     }
     renderBoard();
+    renderTrades(f);
   } catch (e) {
     $('#board-empty').hidden = false;
     $('#board-empty').textContent =
@@ -181,6 +187,98 @@ function renderBoard() {
   });
 }
 
+/* ──────────────────────── whale trades (server-side) ────────────────────── */
+
+const ago = (ts) => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+
+function renderTrades(meta) {
+  if (meta !== undefined) state.feedMeta = meta;
+  meta = state.feedMeta;
+  const body = $('#trades-body');
+  const empty = $('#trades-empty');
+  if (!body) return;
+
+  if (!state.feed.length) {
+    body.textContent = '';
+    empty.hidden = false;
+    empty.textContent = !meta
+      ? 'data/whale_trades.json not published yet — the scheduled job writes it.'
+      : 'No trades in the feed yet.';
+    return;
+  }
+
+  if (meta?.newest_ts) {
+    $('#trades-meta').textContent =
+      `${state.feed.length} fills from ${meta.whales} screened whales · newest ${ago(meta.newest_ts)}`;
+  }
+
+  const wantV = $('#t-verdict').value;
+  const min = Number($('#t-min').value) || 0;
+  const onlyDisc = $('#t-disc').checked;
+
+  const rows = state.feed.filter((t) => {
+    if (wantV && t.verdict !== wantV) return false;
+    if ((t.usd || 0) < min) return false;
+    if (onlyDisc && !t.discovered) return false;
+    return true;
+  });
+
+  body.textContent = '';
+  empty.hidden = rows.length > 0;
+  if (!rows.length) empty.textContent = 'No fills match these filters.';
+  $('#trades-count').textContent = `${rows.length} of ${state.feed.length} fills`;
+
+  rows.slice(0, 400).forEach((t) => {
+    const tr = el('tr');
+    const when = el('td', 'time', ago(t.ts));
+    when.title = new Date(t.ts * 1000).toLocaleString();
+    tr.appendChild(when);
+
+    const who = el('td', 'trader');
+    const nm = el('b', null, t.name || short(t.wallet));
+    const card = state.byWallet.get((t.wallet || '').toLowerCase());
+    if (card) {
+      nm.style.cursor = 'pointer';
+      nm.addEventListener('click', () => openDrawer(card));
+    }
+    who.appendChild(nm);
+    if (t.discovered) who.appendChild(el('span', 'badge-disc', 'OFF-BOARD'));
+    tr.appendChild(who);
+
+    const vd = el('td');
+    vd.appendChild(el('span', `v v-${t.verdict === 'NOT COPYABLE' ? 'NOT' : t.verdict}`,
+      t.verdict));
+    tr.appendChild(vd);
+
+    tr.appendChild(el('td', `side-${t.side}`, t.side || '—'));
+    tr.appendChild(el('td', 'num', money(t.usd)));
+    tr.appendChild(el('td', 'num', t.price != null ? Number(t.price).toFixed(3) : '—'));
+    tr.appendChild(el('td', null, t.outcome || '—'));
+
+    const mk = el('td', 'mkt');
+    if (t.slug) {
+      const a = el('a', null, t.title || t.slug);
+      a.href = `https://polymarket.com/event/${t.slug}`;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.style.color = 'inherit';
+      mk.appendChild(a);
+    } else {
+      mk.textContent = t.title || '—';
+    }
+    mk.title = t.title || '';
+    tr.appendChild(mk);
+
+    body.appendChild(tr);
+  });
+}
+
 /* ───────────────────────────── detail drawer ────────────────────────── */
 
 function openDrawer(c) {
@@ -265,8 +363,10 @@ function passesTapeFilters(t) {
   const notional = (Number(t.size) || 0) * (Number(t.price) || 0);
   if (notional < (Number($('#f-min').value) || 0)) return false;
   if ($('#f-crypto').checked && isChurn(t)) return false;
-  if ($('#f-tracked').checked && !state.byWallet.has((t.proxyWallet || '').toLowerCase()))
-    return false;
+  const card = state.byWallet.get((t.proxyWallet || '').toLowerCase());
+  if ($('#f-tracked').checked && !card) return false;
+  if ($('#f-best').checked && !(card && (card.verdict === 'CANDIDATE'
+      || card.verdict === 'WATCH'))) return false;
   return true;
 }
 
@@ -366,7 +466,26 @@ function connect() {
 }
 
 function retry() {
-  setStatus('pill-err', `reconnecting in ${Math.round(backoff / 1000)}s`);
+  state.wsFails = (state.wsFails || 0) + 1;
+  // Three straight failures is not a blip. The overwhelmingly likely cause is
+  // that this browser's DNS cannot resolve polymarket.com -- several Indian
+  // ISPs now sinkhole the whole zone. Say so, and point at the tab that works,
+  // instead of spinning on "connecting..." forever.
+  if (state.wsFails >= 3) {
+    setStatus('pill-err', 'direct feed blocked');
+    const note = $('#tape-empty');
+    if (note) {
+      note.hidden = false;
+      note.textContent =
+        'Cannot reach wss://ws-live-data.polymarket.com from this browser. '
+        + 'This is usually DNS: some networks resolve every polymarket.com '
+        + 'hostname to one unreachable address. The "Whale trades" tab is '
+        + 'collected server-side and works regardless.';
+    }
+  }
+  if (state.wsFails < 3) {
+    setStatus('pill-err', `reconnecting in ${Math.round(backoff / 1000)}s`);
+  }
   setTimeout(connect, backoff);
   // There is no resume cursor on this socket — a reconnect is a fresh start and
   // trades during the gap are simply lost. The tape is a monitor, not a ledger.
@@ -387,7 +506,7 @@ document.querySelectorAll('.tab').forEach((t) => {
   t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
     t.classList.add('active');
-    ['board', 'tape', 'method'].forEach((n) => {
+    ['board', 'trades', 'tape', 'method'].forEach((n) => {
       $(`#panel-${n}`).hidden = n !== t.dataset.tab;
     });
   });
@@ -395,6 +514,9 @@ document.querySelectorAll('.tab').forEach((t) => {
 
 ['#sort', '#f-verdict', '#f-rankable', '#f-disc'].forEach((s) =>
   $(s).addEventListener('change', renderBoard));
+
+['#t-verdict', '#t-min', '#t-disc'].forEach((s) =>
+  $(s).addEventListener('input', () => renderTrades()));
 
 $('#pause').addEventListener('click', () => {
   state.paused = !state.paused;

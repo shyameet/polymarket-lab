@@ -51,6 +51,10 @@ _ALLOWED: dict[str, set[str]] = {
     },
     "/v2/activity": {"user", "limit", "cursor", "sort_by", "sort_direction", "type"},
     "/v2/holders": {"condition", "limit", "include_pnl", "min_balance", "cursor"},
+    # v1 -- camelCase params, offset paging. Kept because its payload is
+    # field-identical to the websocket activity payload.
+    "/trades": {"user", "market", "limit", "offset", "takerOnly", "side",
+                "filterType", "filterAmount"},
 }
 
 
