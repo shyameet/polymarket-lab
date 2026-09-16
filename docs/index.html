@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Live Polymarket trade tape and copy-trade screening — ranked by drawdown, not profit.">
-<link rel="stylesheet" href="style.css">
+<!-- ?v= is load-bearing: GitHub Pages serves every asset with
+     Cache-Control: max-age=600 and caches them INDEPENDENTLY, so a
+     fresh index.html can run against a 10-minute-old app.js. Bump
+     this token whenever app.js or style.css changes. -->
+<link rel="stylesheet" href="style.css?v=20260916c">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
 </head>
 <body>
@@ -272,6 +276,6 @@
   Research only — not advice.
 </footer>
 
-<script src="app.js" type="module"></script>
+<script src="app.js?v=20260916c" type="module"></script>
 </body>
 </html>
