@@ -19,9 +19,12 @@
     </div>
   </div>
   <div class="status">
-    <span id="ws-pill" class="pill pill-off"><i></i><span id="ws-text">connecting…</span></span>
-    <span id="rate" class="rate">—</span>
+    <!-- The FEED is the headline. The direct socket is dead on any network that
+         sinkholes the polymarket.com zone, and letting its status sit in the
+         global header made a fully working page look broken. -->
+    <span id="feed-pill" class="pill pill-off"><i></i><span id="feed-text">loading…</span></span>
     <span id="built" class="built">—</span>
+    <span id="ws-mini" class="wsmini"></span>
   </div>
 </header>
 

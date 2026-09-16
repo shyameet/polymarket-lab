@@ -200,6 +200,7 @@ const ago = (ts) => {
 function renderTrades(meta) {
   if (meta !== undefined) state.feedMeta = meta;
   meta = state.feedMeta;
+  setFeedStatus(meta?.newest_ts);
   const body = $('#trades-body');
   const empty = $('#trades-empty');
   if (!body) return;
@@ -434,8 +435,23 @@ function notify(t, card, notional) {
 let ws = null, backoff = 1000, pinger = null;
 
 function setStatus(cls, text) {
-  $('#ws-pill').className = `pill ${cls}`;
-  $('#ws-text').textContent = text;
+  // Deliberately NOT the header pill. The direct socket is unreachable on any
+  // network that sinkholes polymarket.com DNS, and that is not a reason to
+  // show a red light above a page whose data is fine.
+  const m = $('#ws-mini');
+  if (m) m.textContent = `direct socket: ${text}`;
+}
+
+// The header pill reports FEED FRESHNESS -- the thing that actually determines
+// whether what you're looking at is current.
+function setFeedStatus(newestTs) {
+  const pill = $('#feed-pill');
+  const txt = $('#feed-text');
+  if (!pill || !txt) return;
+  if (!newestTs) { pill.className = 'pill pill-off'; txt.textContent = 'no feed'; return; }
+  const mins = (Date.now() / 1000 - newestTs) / 60;
+  pill.className = `pill ${mins < 45 ? 'pill-on' : 'pill-off'}`;
+  txt.textContent = `feed ${ago(newestTs)}`;
 }
 
 const WS_MAX_FAILS = 6;   // after this, stop dialling a number that never answers
@@ -508,9 +524,13 @@ function retry() {
 setInterval(() => {
   const cut = Date.now() - RATE_WINDOW_MS;
   state.stamps = state.stamps.filter((t) => t > cut);
-  $('#rate').textContent = state.stamps.length
-    ? `${(state.stamps.length / (RATE_WINDOW_MS / 1000)).toFixed(0)} fills/s`
-    : '—';
+  // #rate was folded into the muted socket footnote; only meaningful when the
+  // direct socket is actually delivering.
+  if (state.stamps.length) {
+    const m = $('#ws-mini');
+    if (m) m.textContent =
+      `direct socket: ${(state.stamps.length / (RATE_WINDOW_MS / 1000)).toFixed(0)} fills/s`;
+  }
 }, 1000);
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
@@ -569,3 +589,19 @@ setInterval(() => {
 
 loadData();
 connect();
+
+// Without a websocket this page would freeze at whatever it loaded with. The
+// scheduled job republishes every 15 minutes, so re-pull the committed feed and
+// keep the freshness indicator moving between pulls.
+setInterval(async () => {
+  try {
+    const f = await fetch('data/whale_trades.json', { cache: 'no-cache' })
+      .then((r) => r.json());
+    if (f?.trades?.length) {
+      state.feed = f.trades;
+      renderTrades(f);
+    }
+  } catch { /* offline or mid-deploy; the next tick retries */ }
+}, 120_000);
+
+setInterval(() => setFeedStatus(state.feedMeta?.newest_ts), 30_000);
