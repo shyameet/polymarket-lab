@@ -1,1 +1,2 @@
 requests>=2.31
+cryptography>=42.0   # RSA-PSS signing for the Kalshi demo API
