@@ -38,7 +38,16 @@ from typing import Any, Iterator
 
 # ---------------------------------------------------------------- constants
 
-# CTF Exchange v2 — live. Migrated 2026-04-28.
+# THREE contracts emit OrderFilled, not one. Discovered by an ADDRESS-LESS
+# eth_getLogs scan over 100 blocks (5,655 events) rather than by assumption --
+# reading only the main exchange silently drops 15.7% of the tape.
+EXCHANGES = {
+    "0xe111180000d2663c0091e4f400237545b87b996b": "CTF Exchange v2",      # 84.3%
+    "0xe2222d279d744050d28e00520010520000310f59": "venue 2 (neg-risk)",   # 14.9%
+    "0xe3333700ca9d93003f00f0f71f8515005f6c00aa": "venue 3",              #  0.8%
+}
+
+# CTF Exchange v2 — the largest venue. Kept as a name for callers that want one.
 EXCHANGE_V2 = "0xe111180000d2663c0091e4f400237545b87b996b"
 # CTF Exchange v1 — DEAD. Kept only so callers can assert they are NOT using it.
 EXCHANGE_V1_DEAD = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
@@ -58,6 +67,12 @@ PUBLIC_RPCS = [
     "https://polygon-bor-rpc.publicnode.com",
     # NOT polygon-rpc.com -- returns "API key disabled, tenant disabled".
 ]
+
+# Venue DISCOVERY needs an address-less eth_getLogs, and publicnode refuses those
+# outright (-32701 "Please specify an address in your request"). That refusal is
+# exactly why two venues went unnoticed: an address-filtered query can only ever
+# confirm what you already believed. Discovery must run somewhere that allows it.
+DISCOVERY_RPCS = ["https://polygon.drpc.org"]
 
 # USDC and Polymarket outcome shares are both 6-decimal.
 DECIMALS = 1_000_000
@@ -213,9 +228,11 @@ def fills(client: PolygonClient, from_block: int, to_block: int,
     else:
         queries = [[TOPIC_ORDER_FILLED]]
 
+    addresses = [address] if address else list(EXCHANGES)
     seen: set = set()
-    for topics in queries:
-        for log in client.logs(from_block, to_block, topics=topics, address=address):
+    for addr in addresses:
+      for topics in queries:
+        for log in client.logs(from_block, to_block, topics=topics, address=addr):
             t = decode_fill(log)
             if not t:
                 continue
@@ -223,6 +240,7 @@ def fills(client: PolygonClient, from_block: int, to_block: int,
             if key in seen:
                 continue
             seen.add(key)
+            t["venue"] = EXCHANGES.get(addr.lower(), addr)
             yield t
 
 
@@ -238,6 +256,18 @@ def assert_tape_alive(client: PolygonClient, *, blocks: int = 50,
     Call this before trusting ANY analysis built on the chain.
     """
     addr = address or EXCHANGE_V2
+    if address is None:
+        # check the whole venue set, not just the biggest one
+        total = 0
+        for a in EXCHANGES:
+            head_ = client.block_number()
+            total += sum(1 for lg in client.logs(head_ - blocks + 1, head_, address=a)
+                         if decode_fill(lg))
+        if total < min_fills:
+            raise ChainError(
+                f"TAPE IS EMPTY across all {len(EXCHANGES)} known venues "
+                f"({total} fills in {blocks} blocks). Refusing to proceed.")
+        return total
     if addr.lower() == EXCHANGE_V1_DEAD.lower():
         raise ChainError(
             f"Refusing to read {EXCHANGE_V1_DEAD}: this is the DEAD v1 exchange. "
@@ -267,3 +297,38 @@ if __name__ == "__main__":
     print(f"{len(sample)} fills decoded | {buys} BUY / {len(sample) - buys} SELL")
     for t in sorted(sample, key=lambda x: -x["usd"])[:5]:
         print(f"  ${t['usd']:>10,.2f} {t['side']:<4} @ {t['price']:.3f}  maker {t['maker'][:10]}…")
+
+
+def discover_venues(client: PolygonClient | None = None, *, blocks: int = 100) -> dict:
+    """Address-LESS scan: which contracts are actually emitting OrderFilled?
+
+    Run this periodically as a canary. Polymarket has already moved venues once
+    (the v1 exchange went silent at the 2026-04-28 migration) and currently
+    spreads fills across three contracts. An address-filtered query can only
+    confirm what you already believe, so a new venue appearing is INVISIBLE to
+    normal reads -- your tape just quietly loses a slice of the market.
+
+    Returns {address: fill_count}. Raises if an unknown venue shows up.
+    """
+    c = client or PolygonClient(DISCOVERY_RPCS)
+    head = c.block_number()
+    found: dict[str, int] = {}
+    step = 20
+    for lo in range(head - blocks + 1, head + 1, step):
+        hi = min(lo + step - 1, head)
+        for log in c.call("eth_getLogs", [{
+            "fromBlock": hex(lo), "toBlock": hex(hi), "topics": [TOPIC_ORDER_FILLED],
+        }]):
+            a = log["address"].lower()
+            found[a] = found.get(a, 0) + 1
+
+    unknown = {a: n for a, n in found.items() if a not in EXCHANGES}
+    if unknown:
+        raise ChainError(
+            f"NEW VENUE(S) EMITTING OrderFilled: {unknown}. The tape is now "
+            f"incomplete -- add them to EXCHANGES. Known: {list(EXCHANGES)}"
+        )
+    missing = [a for a in EXCHANGES if a not in found]
+    if missing:
+        print(f"  note: no fills from {missing} in {blocks} blocks (may be idle, not dead)")
+    return found
