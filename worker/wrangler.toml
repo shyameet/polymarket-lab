@@ -1,0 +1,6 @@
+name = "polymarket-relay"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# No KV, no Durable Objects, no secrets -- this is a stateless pipe, so it runs
+# comfortably inside the Cloudflare free tier (100k requests/day).
