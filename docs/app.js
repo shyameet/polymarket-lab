@@ -222,10 +222,14 @@ function renderTrades(meta) {
   const min = Number($('#t-min').value) || 0;
   const onlyDisc = $('#t-disc').checked;
 
+  const noCrypto = $('#t-nocrypto').checked;
   const rows = state.feed.filter((t) => {
     if (wantV && t.verdict !== wantV) return false;
     if ((t.usd || 0) < min) return false;
     if (onlyDisc && !t.discovered) return false;
+    // Even screened whales fire off $2 crypto up/down fills. At min=0 those
+    // bury the $50k sports positions that are the reason to watch them.
+    if (noCrypto && /Up or Down|updown-\d+m/i.test(`${t.title} ${t.slug}`)) return false;
     return true;
   });
 
@@ -524,7 +528,7 @@ document.querySelectorAll('.tab').forEach((t) => {
 ['#sort', '#f-verdict', '#f-rankable', '#f-disc'].forEach((s) =>
   $(s).addEventListener('change', renderBoard));
 
-['#t-verdict', '#t-min', '#t-disc'].forEach((s) =>
+['#t-verdict', '#t-min', '#t-disc', '#t-nocrypto'].forEach((s) =>
   $(s).addEventListener('input', () => renderTrades()));
 
 $('#pause').addEventListener('click', () => {
