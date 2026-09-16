@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Polymarket Whale Lab</title>
+<meta name="description" content="Live Polymarket trade tape and copy-trade screening — ranked by drawdown, not profit.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo">🐋</span>
+    <div>
+      <h1>Polymarket Whale Lab</h1>
+      <p class="sub">Ranked by drawdown, not profit.</p>
+    </div>
+  </div>
+  <div class="status">
+    <span id="ws-pill" class="pill pill-off"><i></i><span id="ws-text">connecting…</span></span>
+    <span id="rate" class="rate">—</span>
+    <span id="built" class="built">—</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="board" role="tab">Whale board</button>
+  <button class="tab" data-tab="tape" role="tab">Live tape</button>
+  <button class="tab" data-tab="method" role="tab">Method</button>
+</nav>
+
+<!-- ───────────────────────────────── BOARD ───────────────────────────────── -->
+<section id="panel-board" class="panel">
+
+  <div class="callout">
+    <strong>Read this before you copy anyone.</strong>
+    This board is a <em>screen</em>, not a signal. Ranking wallets by past PnL
+    selects for whoever took the biggest bet and won — which is not a repeatable
+    property. Every wallet here is scored for <b>durability</b> and
+    <b>copyability</b>, and most of the leaderboard fails both.
+    <span id="callout-stats"></span>
+  </div>
+
+  <div class="toolbar">
+    <label>Sort
+      <select id="sort">
+        <option value="screen">Screen rank  (verdict, then Net/DD)</option>
+        <option value="net_dd">Net / MaxDD  (risk first)</option>
+        <option value="position_pnl">Total PnL</option>
+        <option value="max_dd_usd">Max drawdown</option>
+        <option value="pct_positive_months">% positive months</option>
+        <option value="edge_per_dollar">Edge per $ traded</option>
+        <option value="trade_count">Fills</option>
+      </select>
+    </label>
+    <label>Verdict
+      <select id="f-verdict">
+        <option value="">all</option>
+        <option value="CANDIDATE">CANDIDATE</option>
+        <option value="WATCH">WATCH</option>
+        <option value="FRAGILE">FRAGILE</option>
+        <option value="NOT COPYABLE">NOT COPYABLE</option>
+        <option value="INSUFFICIENT">INSUFFICIENT</option>
+      </select>
+    </label>
+    <label class="chk"><input type="checkbox" id="f-rankable"> only rankable</label>
+    <label class="chk"><input type="checkbox" id="f-disc"> only discovered (off-leaderboard)</label>
+    <span class="spacer"></span>
+    <span id="board-count" class="count"></span>
+  </div>
+
+  <div class="tablewrap">
+    <table id="board">
+      <thead>
+        <tr>
+          <th>#</th><th>Trader</th><th>Verdict</th>
+          <th class="num">PnL</th><th class="num">Max DD</th><th class="num">Net/DD</th>
+          <th class="num">Mo +%</th><th class="num">Conc.</th>
+          <th class="num">Edge/$</th><th class="num">Fills</th>
+          <th>Why not</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="board-body"></tbody>
+    </table>
+    <p id="board-empty" class="empty" hidden>No wallets match these filters.</p>
+  </div>
+</section>
+
+<!-- ────────────────────────────────── TAPE ───────────────────────────────── -->
+<section id="panel-tape" class="panel" hidden>
+  <div class="callout small">
+    Live, unauthenticated feed from <code>wss://ws-live-data.polymarket.com</code>
+    — every fill on the platform, no per-market subscription.
+    <b>Measured over 46s: 28.5 fills/sec, median fill <code>$2.40</code>, p90
+    <code>$25</code>, largest <code>$2,000</code>.</b>
+    Almost all of it is dust, so the size filter is doing real work —
+    <code>$100</code> keeps roughly 34 fills/min. 5-minute crypto markets are
+    hidden by default for the same reason (they are 65% of all fills).
+    About 6% of messages arrive with the market name blank; those show as
+    <code>—</code>.
+  </div>
+
+  <div class="toolbar">
+    <label>Min size $
+      <input type="number" id="f-min" value="100" min="0" step="100">
+    </label>
+    <label class="chk"><input type="checkbox" id="f-crypto" checked> hide 5-min crypto churn</label>
+    <label class="chk"><input type="checkbox" id="f-tracked"> tracked wallets only</label>
+    <label class="chk"><input type="checkbox" id="f-alert"> 🔔 notify on tracked</label>
+    <span class="spacer"></span>
+    <button id="pause" class="btn">Pause</button>
+    <span id="tape-count" class="count"></span>
+  </div>
+
+  <div class="tablewrap">
+    <table id="tape">
+      <thead><tr>
+        <th>Time</th><th>Trader</th><th>Side</th>
+        <th class="num">Size $</th><th class="num">Price</th>
+        <th>Outcome</th><th>Market</th>
+      </tr></thead>
+      <tbody id="tape-body"></tbody>
+    </table>
+    <p id="tape-empty" class="empty">Waiting for fills…</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────────── METHOD ──────────────────────────────── -->
+<section id="panel-method" class="panel" hidden>
+  <article class="prose">
+    <h2>What this scores, and why</h2>
+    <p>
+      The instinct is to sort wallets by profit and copy the top one. That fails
+      for a specific, measurable reason: a profit leaderboard is a
+      <b>sorted in-sample pool</b>. It ranks people by an outcome that was
+      partly luck, and rank on such a pool carries no forward information.
+    </p>
+    <p>Two real wallets, both measured from the public API:</p>
+    <table class="mini">
+      <tr><th>Theo4</th><td>
+        #1 all-time at <b>$22.05M</b>. Also: <b>38% of it from one position</b>,
+        only <b>4 of 23 months positive</b>, <b>$5.39M</b> peak-to-trough, and
+        dormant since Feb 2026. A lottery ticket that hit.</td></tr>
+      <tr><th>RN1</th><td>
+        <b>$12.5M</b> across <b>4.7M fills</b>, <b>100% positive months</b> —
+        statistically real. And <b>39% of profit is rebates and rewards</b>, at
+        a <b>2.1% edge per dollar</b>. A market maker. You cannot follow someone
+        into a quote.</td></tr>
+    </table>
+    <p>So the board scores four things instead of profit:</p>
+    <dl>
+      <dt>Net / MaxDD</dt>
+      <dd>Profit per dollar of peak-to-trough pain. Scale-invariant, so it
+        compares across bankrolls. Drawdown is measured on
+        <code>position_pnl</code> — <b>mark-inclusive</b> — because a
+        realized-only curve hides the pain of an open position that is 60% under
+        until the day it closes.</dd>
+      <dt>Concentration</dt>
+      <dd>Share of lifetime profit from the single best position. High means the
+        record is one bet, not a process.</dd>
+      <dt>Program income share</dt>
+      <dd>Maker rebates, liquidity rewards, referrals. Real money that accrues to
+        market-making behaviour, and <b>none of it transfers to a copier</b>.</dd>
+      <dt>Edge per dollar traded</dt>
+      <dd>Above ~20% is a concentrated directional bettor; below ~3% on huge
+        volume is a spread grinder. Copyable edge lives in between.</dd>
+    </dl>
+
+    <h3>Two traps this had to be hardened against</h3>
+    <p>
+      <b>The curve doesn't start at zero.</b> One wallet's equity series opens at
+      <b>−$176,289</b>. Seeding the high-water mark at the first observation
+      treats "already six figures down" as the peak, erasing the entire inception
+      drawdown and reporting a riskless-looking <code>MaxDD = $0</code>. The curve
+      is now seeded at zero.
+    </p>
+    <p>
+      <b>Some curves are fake.</b> The API sometimes back-fills a flat line: one
+      wallet's 93-point history was a <b>single value repeated 93 times</b>. A
+      flat line has zero variance, therefore zero drawdown, therefore an
+      <b>infinite Net/DD</b> — which would sort it straight to the top of a
+      risk-first ranking. Wallets whose curve moves fewer than 10 times are
+      marked <span class="v v-INSUFFICIENT">INSUFFICIENT</span> and refused a rank.
+      Without that gate, the top of this board was four wallets whose drawdown was
+      simply <em>unmeasured</em>.
+    </p>
+
+    <h3>What this deliberately does not do</h3>
+    <p>
+      It does not tell you to copy anyone, and it has <b>no execution code</b> —
+      no keys, no orders, nothing that can place a trade. A high rank here means
+      "worth forward-testing", not "worth money". The honest next step is to
+      paper-track a shortlist forward and see whether rank survives out of sample.
+      In a comparable study on futures configs, it did not.
+    </p>
+    <p class="warn">
+      <b>Access note.</b> Polymarket is blocked in India under a MeitY s69A order
+      (~22 May 2026), following the Promotion and Regulation of Online Gaming Act
+      2025, which classes prediction markets as prohibited online money games.
+      The read-only APIs this page uses still resolve; the trading site does not.
+      This page is research on public data and places no trades.
+    </p>
+  </article>
+</section>
+
+<!-- ───────────────────────────────── DRAWER ──────────────────────────────── -->
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-inner">
+    <button id="drawer-close" class="close" aria-label="Close">×</button>
+    <div id="drawer-body"></div>
+  </div>
+</div>
+
+<footer class="foot">
+  Data: Polymarket public APIs (Gamma / CLOB / Data v2) + the live activity
+  socket. Scorecards rebuilt by a scheduled job; the tape is live in your browser.
+  Research only — not advice.
+</footer>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

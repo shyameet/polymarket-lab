@@ -1,0 +1,77 @@
+name: Refresh whale scorecards
+
+# GitHub Pages cannot run a server, so Actions IS the backend. This job does the
+# expensive part -- ~3 API calls per wallet, ~280 wallets -- and commits compact
+# JSON that the static page just renders. The live trade tape does not come
+# through here; the browser opens its own websocket for that.
+
+on:
+  schedule:
+    # Hourly. The underlying REST data is CDN-cached for 5 minutes anyway, so
+    # there is nothing to gain from running this more often.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      top:
+        description: 'Rows per leaderboard view'
+        default: '60'
+      discover:
+        description: 'Scan market holders for off-leaderboard wallets'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths: ['pipeline/**', '.github/workflows/refresh.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build scorecards
+        working-directory: pipeline
+        run: |
+          python -m pm.build \
+            --top "${{ github.event.inputs.top || 60 }}" \
+            --workers 8 \
+            --out ../docs/data \
+            ${{ github.event.inputs.discover == 'false' && '--no-discover' || '' }}
+
+      - name: Sanity-check the output
+        run: |
+          python - <<'PY'
+          import json, sys
+          w = json.load(open('docs/data/whales.json', encoding='utf-8'))
+          m = json.load(open('docs/data/meta.json', encoding='utf-8'))
+          # Refuse to publish a broken build. A partial API outage would
+          # otherwise silently replace a good board with a near-empty one.
+          assert len(w) >= 50, f'only {len(w)} wallets scored -- refusing to publish'
+          assert m['rankable'] >= 10, f"only {m['rankable']} rankable"
+          assert any(c['verdict'] != 'INSUFFICIENT' for c in w), 'all insufficient'
+          print(f"OK: {len(w)} wallets, {m['rankable']} rankable, {m['verdicts']}")
+          PY
+
+      - name: Commit if changed
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add docs/data
+          if git diff --staged --quiet; then
+            echo 'no change'
+          else
+            git commit -m "data: refresh scorecards ($(date -u +%Y-%m-%dT%H:%MZ))"
+            git push
+          fi
