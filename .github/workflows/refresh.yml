@@ -29,7 +29,10 @@ permissions:
 
 concurrency:
   group: refresh
-  cancel-in-progress: false
+  # Cancel an older in-flight run rather than queueing behind it. Each run
+  # regenerates the data from scratch, so a superseded run has nothing worth
+  # finishing, and queued runs race each other to push.
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -76,7 +79,25 @@ jobs:
           git add docs/data
           if git diff --staged --quiet; then
             echo 'no change'
-          else
-            git commit -m "data: refresh scorecards ($(date -u +%Y-%m-%dT%H:%MZ))"
-            git push
+            exit 0
           fi
+          git commit -m "data: refresh scorecards ($(date -u +%Y-%m-%dT%H:%MZ))"
+
+          # Push with rebase-retry. Two runs overlapping (a schedule tick landing
+          # on a push, or a manual dispatch) previously lost one to
+          # "! [rejected] main -> main (fetch first)" -- the build succeeded and
+          # the data was simply thrown away. Only docs/data is ever touched here
+          # and each run regenerates it wholesale, so preferring our side on a
+          # conflict is always correct.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "push rejected, rebasing (attempt $attempt)"
+            git fetch origin main
+            git rebase -X ours origin/main || { git rebase --abort; exit 1; }
+            sleep $((attempt * 3))
+          done
+          echo "::error::could not push after 5 attempts"
+          exit 1
