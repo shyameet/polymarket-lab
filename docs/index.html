@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
-<meta name="description" content="Track Polymarket whales, what they're holding, when they exit, and what a mirrored trade would cost — screened by drawdown rather than profit.">
-<link rel="stylesheet" href="style.css?v=20260917a">
+<meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and a warning the moment they get out.">
+<link rel="stylesheet" href="style.css?v=20260917c">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
 </head>
 <body>
@@ -15,19 +15,18 @@
     <span class="logo">🐋</span>
     <h1>Whale Lab</h1>
   </div>
-
   <div class="live">
     <span id="dot" class="dot"></span>
     <span id="live-text">starting…</span>
-    <button id="src-btn" class="linkish" title="Change data source">source</button>
+    <button id="src-btn" class="linkish">data source</button>
   </div>
 </header>
 
 <div id="src-panel" class="srcpanel" hidden>
   <p>
-    This page reads Polymarket directly from your browser. If your network
-    can't resolve <code>polymarket.com</code>, that fails — paste a relay URL
-    and it will use that instead.
+    This page reads Polymarket straight from your browser. If your network can't
+    resolve <code>polymarket.com</code> that fails, and it falls back to a saved
+    snapshot. Paste a relay URL to get live data anyway.
   </p>
   <div class="srcrow">
     <input id="relay" type="url" placeholder="https://polymarket-relay.you.workers.dev" spellcheck="false">
@@ -42,53 +41,90 @@
 </div>
 
 <nav class="seg" role="tablist">
-  <button class="segbtn active" data-view="trades" role="tab">Trades</button>
-  <button class="segbtn" data-view="positions" role="tab">Positions</button>
-  <button class="segbtn" data-view="whales" role="tab">Whales</button>
+  <button class="segbtn active" data-view="whales" role="tab">Who to follow</button>
+  <button class="segbtn" data-view="trades" role="tab">Live buys</button>
+  <button class="segbtn" data-view="positions" role="tab">What they hold</button>
+  <button class="segbtn" data-view="mine" role="tab">My copies<span id="mine-badge" class="badge" hidden>0</span></button>
 </nav>
 
-<!-- ─────────────────────────────── TRADES ─────────────────────────────── -->
-<section id="view-trades" class="view">
+<!-- ───────────────────────── WHO TO FOLLOW ───────────────────────── -->
+<section id="view-whales" class="view">
+  <p class="hint" id="w-intro"></p>
+
+  <div class="controls">
+    <div class="chips" id="w-chips">
+      <button class="chip active" data-v="good">Worth following</button>
+      <button class="chip" data-v="CANDIDATE">Best only</button>
+      <button class="chip" data-v="FRAGILE">Risky</button>
+      <button class="chip" data-v="NOT COPYABLE">Avoid</button>
+      <button class="chip" data-v="">Everyone</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="chips" id="w-cat-chips">
+      <button class="chip active" data-cat="">All markets</button>
+      <button class="chip" data-cat="crypto">Crypto</button>
+      <button class="chip" data-cat="sports">Sports</button>
+      <button class="chip" data-cat="politics">Politics</button>
+      <button class="chip" data-cat="esports">Esports</button>
+      <button class="chip" data-cat="combos">Parlays</button>
+    </div>
+    <label class="minlbl">Rank by
+      <select id="w-sort">
+        <option value="screen">Best overall</option>
+        <option value="lb_day_pnl">Made most today</option>
+        <option value="lb_week_pnl">Made most this week</option>
+        <option value="net_dd">Safest (profit vs. drop)</option>
+        <option value="position_pnl">Biggest total profit</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="w-stats" class="statrow"></div>
+  <p class="hint" id="w-sort-hint" hidden></p>
+
+  <ul id="board" class="board"></ul>
+  <p id="board-empty" class="empty" hidden>Nothing matches these filters.</p>
+</section>
+
+<!-- ───────────────────────────── LIVE BUYS ───────────────────────────── -->
+<section id="view-trades" class="view" hidden>
   <div class="controls">
     <div class="chips" id="t-chips">
-      <button class="chip active" data-who="best">Best whales</button>
+      <button class="chip active" data-who="best">Followed whales</button>
       <button class="chip" data-who="all">All screened</button>
       <button class="chip" data-who="everyone">Everyone</button>
     </div>
-    <label class="minlbl">min&nbsp;$
-      <input type="number" id="t-min" value="100" min="0" step="50">
+    <label class="minlbl">Min bet $
+      <input type="number" id="t-min" value="250" min="0" step="50">
     </label>
-    <label class="minlbl" title="Used to size the 'if you copied this' line below each trade">
-      mirror&nbsp;$
+    <label class="minlbl">My stake $
       <input type="number" id="t-stake" value="25" min="1" step="5">
     </label>
     <button id="pause" class="btn">Pause</button>
   </div>
 
-  <p class="hint">Updates every couple of seconds, newest first. Click a name to see the wallet's full scorecard.</p>
+  <p class="hint">Newest first, refreshing every couple of seconds. Tap a name for
+    their full record, or <b>Copy this</b> to track that you took the same bet.</p>
 
   <ul id="tape" class="tape"></ul>
   <p id="tape-empty" class="empty">Connecting…</p>
 </section>
 
-<!-- ────────────────────────────── POSITIONS ────────────────────────────── -->
+<!-- ──────────────────────── WHAT THEY HOLD ──────────────────────── -->
 <section id="view-positions" class="view" hidden>
-  <div class="callout small">
-    <strong>This answers "when do I get out?"</strong> — but as data, not advice.
-    <b>Currently holding</b> and <b>Recently exited</b> are read straight from
-    Polymarket's own position ledger for each screened whale.
-    The default mirror rule shown here is simply <b>exit when they exit</b> —
-    that is what was asked for, and it is real and checkable. It is
-    <b>not yet proven to be the right rule</b>: see
-    <a href="#" id="pos-method-link">Method</a> for why naive copy-exit timing
-    tested badly in this project's own simulation.
+  <div class="callout">
+    <b>Everything a followed whale is holding right now, and what they just got out of.</b>
+    Read straight from Polymarket's own records. If you've copied a position,
+    track it under <b>My copies</b> and you'll get a warning here the moment
+    they exit.
   </div>
 
   <div class="controls">
     <div class="chips" id="p-chips">
-      <button class="chip active" data-p="all">All</button>
-      <button class="chip" data-p="open">Currently holding</button>
-      <button class="chip" data-p="closed">Recently exited</button>
+      <button class="chip active" data-p="all">Everything</button>
+      <button class="chip" data-p="open">Still holding</button>
+      <button class="chip" data-p="closed">Just got out</button>
     </div>
   </div>
 
@@ -98,45 +134,35 @@
   <p id="positions-empty" class="empty">Loading…</p>
 </section>
 
-<!-- ─────────────────────────────── WHALES ─────────────────────────────── -->
-<section id="view-whales" class="view" hidden>
-  <div class="controls">
-    <div class="chips" id="w-chips">
-      <button class="chip active" data-v="good">Worth watching</button>
-      <button class="chip" data-v="CANDIDATE">Candidates only</button>
-      <button class="chip" data-v="FRAGILE">Fragile</button>
-      <button class="chip" data-v="NOT COPYABLE">Rejected</button>
-      <button class="chip" data-v="">All scored</button>
-    </div>
+<!-- ───────────────────────────── MY COPIES ───────────────────────────── -->
+<section id="view-mine" class="view" hidden>
+  <div class="callout warn">
+    <b>Positions you've copied.</b> Saved in this browser only — nothing is sent
+    anywhere, and no trade is ever placed for you. Each one is matched against
+    the whale you copied, so when <b>they</b> get out, this page tells you
+    loudly. It does not tell you that getting out is the right move — see
+    <a href="#" id="mine-method-link">how this works</a>.
   </div>
+
+  <div id="mine-alerts"></div>
+  <div id="mine-stats" class="statrow"></div>
+
   <div class="controls">
-    <div class="chips" id="w-cat-chips">
-      <button class="chip active" data-cat="">Any category</button>
-      <button class="chip" data-cat="crypto">Crypto</button>
-      <button class="chip" data-cat="sports">Sports</button>
-      <button class="chip" data-cat="politics">Politics</button>
-      <button class="chip" data-cat="macro">Macro</button>
-    </div>
-    <label class="minlbl">sort
-      <select id="w-sort">
-        <option value="screen">Screen rank</option>
-        <option value="lb_day_pnl">Best today</option>
-        <option value="lb_week_pnl">Best this week</option>
-        <option value="net_dd">Net / drawdown</option>
-        <option value="position_pnl">Total profit</option>
-        <option value="max_dd_usd">Lowest drawdown</option>
-      </select>
+    <label class="minlbl">
+      <input type="checkbox" id="mine-notify"> Desktop alert when a whale exits
     </label>
+    <button id="mine-clear" class="btn danger small">Clear all</button>
   </div>
 
-  <div id="w-stats" class="statrow"></div>
-  <p class="hint" id="w-sort-hint" hidden></p>
-
-  <ul id="board" class="board"></ul>
-  <p id="board-empty" class="empty" hidden>Nothing matches.</p>
+  <ul id="mine" class="tape"></ul>
+  <p id="mine-empty" class="empty">
+    You haven't copied anything yet.<br>
+    Go to <b>Live buys</b> or <b>What they hold</b> and press <b>Copy this</b> on a
+    bet you've taken. This page will then watch the whale for you.
+  </p>
 </section>
 
-<!-- ─────────────────────────────── DRAWER ─────────────────────────────── -->
+<!-- ───────────────────────────── DRAWER ───────────────────────────── -->
 <div id="drawer" class="drawer" hidden>
   <div class="drawer-inner">
     <button id="drawer-close" class="close" aria-label="Close">×</button>
@@ -152,6 +178,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260917a" type="module"></script>
+<script src="app.js?v=20260917c" type="module"></script>
 </body>
 </html>

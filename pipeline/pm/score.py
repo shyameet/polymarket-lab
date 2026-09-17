@@ -38,6 +38,14 @@ MIN_DAYS_FOR_RANKING = 60
 # drawdown_from_curve) which otherwise produce a perfect, unbeatable Net/DD.
 MIN_CURVE_MOVES = 10
 
+# Above this fill rate you are not looking at a person making decisions you
+# could follow -- you are looking at software. It is a REACHABILITY test, not a
+# skill test: a bot placing thousands of bets a day may well be profitable, but
+# at ~2s Polygon block times you cannot see, decide and mirror fast enough for
+# any of it to transfer. Measured on the live board, 29 of 150 wallets rated
+# "worth following" were running 500-7,000 bets/day.
+MAX_FILLS_PER_DAY = 500
+
 
 def _f(v: Any, default: float = 0.0) -> float:
     try:
@@ -240,9 +248,18 @@ def score_wallet(stats: dict, points: list[dict], *, now_ts: int) -> dict:
         flags.append(
             f"UNBANKED: {unrealized / position_pnl:.0%} of PnL is unrealized marks, not cash")
 
+    fills_per_day = trade_count / max(dd["days"], 1)
+    machine = fills_per_day > MAX_FILLS_PER_DAY
+    if machine:
+        flags.append(
+            f"TOO FAST TO FOLLOW: about {fills_per_day:,.0f} bets a day "
+            f"({trade_count:,} over {dd['days']} days). That is automated -- by the time "
+            f"you saw a bet and placed yours, it would be long gone")
+
     rankable = (trade_count >= MIN_TRADES_FOR_RANKING
                 and dd["days"] >= MIN_DAYS_FOR_RANKING
-                and not degenerate)
+                and not degenerate
+                and not machine)
 
     return {
         "wallet": stats.get("proxy_wallet"),
@@ -264,6 +281,7 @@ def score_wallet(stats: dict, points: list[dict], *, now_ts: int) -> dict:
         "max_dd_pct": dd["max_dd_pct"],
         "net_dd": round(net_dd, 2) if net_dd is not None else None,
         "curve_days": dd["days"],
+        "fills_per_day": round(fills_per_day, 1),
         "curve_moves": dd["move_days"],
         "curve_distinct": dd["distinct_values"],
 
@@ -290,7 +308,8 @@ def _verdict(flags: list[str], rankable: bool, net_dd: float | None) -> str:
     if not rankable:
         return "INSUFFICIENT"
     blocking = [f for f in flags
-                if f.startswith(("ONE-BET", "UNCOPYABLE", "MARKET-MAKER", "DORMANT"))]
+                if f.startswith(("ONE-BET", "UNCOPYABLE", "MARKET-MAKER", "DORMANT",
+                                 "TOO FAST TO FOLLOW"))]
     if blocking:
         return "NOT COPYABLE"
     if any(f.startswith(("LUMPY", "UNBANKED")) for f in flags):

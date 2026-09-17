@@ -1,39 +1,32 @@
 /* Polymarket Whale Lab — front end.
  *
- * THREE DATA SOURCES, TRIED IN ORDER
- * ----------------------------------
- *   relay     a Cloudflare Worker that pipes Polymarket's websocket. Works on
- *             any network, including ones that cannot resolve polymarket.com.
- *   direct    the browser's own websocket to Polymarket. Sub-second, but dies
- *             wherever the polymarket.com DNS zone is sinkholed.
- *   snapshot  data/*.json, committed by the scheduled job. Always available,
- *             never live -- GitHub throttles cron on free public repos and the
- *             observed gap between runs reached 245 minutes.
+ * FOUR VIEWS, in the order you'd actually use them
+ *   Who to follow  the scored board: who is worth copying, in plain words
+ *   Live buys      the fill tape, with a one-tap "I copied this"
+ *   What they hold  every open position, and what was just exited
+ *   My copies      positions YOU took, matched to the whale you copied, with a
+ *                  loud warning the moment that whale gets out
  *
- * Whichever is in use is stated in the header, with its real age. Nothing here
- * is a hardcoded statistic: every number is computed from whatever data is
- * actually loaded, so the page cannot drift away from reality.
+ * "My copies" lives entirely in localStorage. Nothing is sent anywhere, no
+ * account, no keys, and no order is ever placed. It is a notebook that watches
+ * the whale for you.
  *
- * THREE VIEWS
- * -----------
- *   Trades     the live/near-live fill tape, decluttered to what you need to
- *              act on a fill: who, what, price, and what mirroring it at your
- *              own stake would look like.
- *   Positions  what screened whales are CURRENTLY HOLDING and what they
- *              RECENTLY EXITED, read from Polymarket's own position ledger.
- *              This is the honest answer to "when do I get out" -- it shows
- *              you what happened, it does not claim that mirroring it is
- *              proven profitable (see the Method section).
- *   Whales     the scored board: who passed the screen, sortable by all-time
- *              risk-adjusted return or by the official day/week leaderboard,
- *              filterable by category.
+ * DATA SOURCES, tried in order: relay (a Cloudflare Worker piping Polymarket's
+ * websocket) -> direct browser websocket -> committed snapshot JSON. The header
+ * always states which one is live and how old it is.
+ *
+ * LANGUAGE RULE: the previous two passes used quant shorthand (Net/DD,
+ * concentration, edge per $) and were reported as confusing. Every number shown
+ * by default now carries a plain-English label; the jargon survives only in the
+ * detail drawer, where someone has explicitly asked for depth.
  */
 
 const DIRECT_WS = 'wss://ws-live-data.polymarket.com';
-const REFRESH_POLL_MS = 20_000;   // how often the snapshot/positions files are re-pulled
-const RENDER_MS = 2200;           // deliberately slow -- see the user's "goes too fast" note
-const MAX_ROWS = 150;
+const REFRESH_POLL_MS = 20_000;
+const RENDER_MS = 2200;
+const MAX_ROWS = 100;
 const DIRECT_MAX_FAILS = 3;
+const COPIES_KEY = 'myCopies.v1';
 
 const $ = (s) => document.querySelector(s);
 const el = (t, c, txt) => {
@@ -49,22 +42,23 @@ const state = {
   whales: [], byWallet: new Map(),
   trades: [], seenKeys: new Set(),
   positions: { open: [], recently_closed: [] }, posMeta: null,
+  copies: [],
   snapshotMeta: null, meta: null,
   source: 'starting', via: 'direct', paused: false, dirty: true,
   stamps: [], directFails: 0, ws: null, backoff: 1000, pinger: null,
-  view: 'trades', who: 'best', verdict: 'good', category: '', posFilter: 'all',
-  hintShown: false,
+  view: 'whales', who: 'best', verdict: 'good', category: '', posFilter: 'all',
+  hintShown: false, notified: new Set(),
 };
 
 /* ─────────────────────────── format helpers ─────────────────────────── */
 
-const money = (v, forceCents = false) => {
+const money = (v, cents = false) => {
   if (v == null || Number.isNaN(v)) return '—';
   const a = Math.abs(v), s = v < 0 ? '-' : '';
   if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
   if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`;
   if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(a >= 1e5 ? 0 : 1)}k`;
-  if (a < 100 || forceCents) return `${s}$${a.toFixed(2)}`;
+  if (a < 100 || cents) return `${s}$${a.toFixed(2)}`;
   return `${s}$${a.toFixed(0)}`;
 };
 const pct = (v, d = 0) => (v == null ? '—' : `${(v * 100).toFixed(d)}%`);
@@ -74,20 +68,31 @@ const ago = (ts) => {
   if (!ts) return '—';
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
   if (s < 60) return `${s}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  if (s < 172800) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  if (s < 172800) return `${Math.round(s / 3600)} hr`;
+  return `${Math.round(s / 86400)} days`;
 };
 const isChurn = (t) =>
   /Up or Down|updown-\d+m/i.test(`${t.title || ''} ${t.slug || ''}`);
-// Polymarket combo/parlay bets AND several independent markets into one
-// wager -- e.g. "Team A win AND Team B win AND Team C draw". Those have no
-// single outcome (the field comes back empty) and cannot be mirrored as a
-// simple single-market trade, so they need their own handling, not a "?"
-// placeholder and a misleading share count.
+// Combo/parlay bets AND several markets into one wager; they have no single
+// outcome and cannot be mirrored as one trade.
 const isCombo = (t) => !t.outcome && / AND /.test(t.title || '');
+
+const VERDICT_WORD = {
+  CANDIDATE: 'WORTH FOLLOWING',
+  WATCH: 'PROMISING',
+  FRAGILE: 'RISKY',
+  'NOT COPYABLE': 'AVOID',
+  INSUFFICIENT: 'TOO NEW',
+};
 const CAT_LABEL = { crypto: 'Crypto', sports: 'Sports', politics: 'Politics',
-                   macro: 'Macro', other: 'Other' };
+                    esports: 'Esports', combos: 'Parlays', macro: 'Macro', other: '' };
+
+// Polymarket's own category label wins over the regex guess from market text.
+const catOf = (c) => (c.lb_categories && c.lb_categories[0]) || c.category || '';
+
+const verdictPill = (v) =>
+  el('span', `v v-${v === 'NOT COPYABLE' ? 'NOT' : v}`, VERDICT_WORD[v] || v);
 
 const marketLink = (title, slug) => {
   const a = el('a', null, title || slug || '—');
@@ -95,7 +100,11 @@ const marketLink = (title, slug) => {
   return a;
 };
 
-/* ─────────────────────────── relay config ───────────────────────────── */
+// stable key so a copied bet can be matched back to the whale's position
+const posKey = (wallet, slug, title, outcome) =>
+  `${(wallet || '').toLowerCase()}|${slug || title || ''}|${outcome || ''}`;
+
+/* ─────────────────────────── relay / source ─────────────────────────── */
 
 const relayUrl = () => {
   const q = new URLSearchParams(location.search).get('relay');
@@ -103,21 +112,18 @@ const relayUrl = () => {
   return (lsGet('relay', '') || '').replace(/\/+$/, '');
 };
 
-/* ────────────────────────── source indicator ────────────────────────── */
-
 function setSource(kind, detail) {
   state.source = kind;
-  const dot = $('#dot'), txt = $('#live-text');
-  dot.className = `dot ${{ live: 'on', snapshot: 'warn', down: 'off' }[kind] || ''}`;
-  txt.textContent = detail;
+  $('#dot').className = `dot ${{ live: 'on', snapshot: 'warn', down: 'off' }[kind] || ''}`;
+  $('#live-text').textContent = detail;
 }
 
 function refreshSourceLabel() {
   if (state.source === 'live') {
-    setSource('live', `LIVE · ${(state.stamps.length / 10).toFixed(0)}/s · ${state.via}`);
+    setSource('live', `Live · ${(state.stamps.length / 10).toFixed(0)}/sec`);
   } else if (state.source === 'snapshot') {
     const ts = state.snapshotMeta?.newest_ts;
-    setSource('snapshot', ts ? `SNAPSHOT · ${ago(ts)} old` : 'SNAPSHOT');
+    setSource('snapshot', ts ? `Saved data · ${ago(ts)} old` : 'Saved data');
   }
 }
 
@@ -171,26 +177,23 @@ function connect() {
   try { ws = new WebSocket(url); } catch { return onWsDead(); }
   state.ws = ws;
 
-  // A socket pointed at a sinkholed address can hang for over a minute before
-  // the OS gives up. Judge it ourselves.
+  // A socket aimed at a sinkholed address can hang for over a minute before the
+  // OS gives up. Judge it ourselves.
   const openTimer = setTimeout(() => {
-    if (ws.readyState !== WebSocket.OPEN) {
-      try { ws.close(); } catch {}   // triggers onclose -> onWsDead
-    }
+    if (ws.readyState !== WebSocket.OPEN) { try { ws.close(); } catch {} }
   }, 8000);
 
   ws.onopen = () => {
     clearTimeout(openTimer);
     state.backoff = 1000;
     state.directFails = 0;
-    // The relay auto-subscribes; a direct socket must send the frame itself.
     if (!relay) {
       ws.send(JSON.stringify({
         action: 'subscribe',
         subscriptions: [{ topic: 'activity', type: 'trades' }],
       }));
     }
-    setSource('live', `LIVE · ${state.via}`);
+    setSource('live', 'Live');
     clearInterval(state.pinger);
     state.pinger = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) { try { ws.send('PING'); } catch {} }
@@ -209,32 +212,25 @@ function connect() {
   };
 
   ws.onerror = () => {};
-  ws.onclose = () => {
-    clearTimeout(openTimer);
-    clearInterval(state.pinger);
-    onWsDead();
-  };
+  ws.onclose = () => { clearTimeout(openTimer); clearInterval(state.pinger); onWsDead(); };
 }
 
 function onWsDead() {
   state.directFails += 1;
   const relay = relayUrl();
-
-  // A sinkholed DNS zone does not heal on a backoff timer. Fall back to the
-  // committed snapshot rather than retrying forever, and say why.
   if (!relay && state.directFails >= DIRECT_MAX_FAILS) {
     state.source = 'snapshot';
     refreshSourceLabel();
     $('#src-status').textContent =
-      'Direct connection to Polymarket failed — usually DNS. Showing the committed '
-      + 'snapshot instead. Add a relay below, or set your DNS to 1.1.1.1, for live data.';
+      "Couldn't reach Polymarket directly — usually a DNS block. Showing saved data "
+      + 'instead. Add a relay below, or set your DNS to 1.1.1.1, for live data.';
     if (!state.hintShown) { state.hintShown = true; $('#src-panel').hidden = false; }
     return;
   }
   if (relay && state.directFails >= DIRECT_MAX_FAILS + 3) {
     state.source = 'snapshot';
     refreshSourceLabel();
-    $('#src-status').textContent = `Relay ${relay} is not responding. Check it is deployed.`;
+    $('#src-status').textContent = `Relay ${relay} isn't responding. Check it's deployed.`;
     $('#src-panel').hidden = false;
     return;
   }
@@ -260,43 +256,129 @@ async function loadWhales() {
 
 async function loadSnapshot() {
   try {
-    const f = await fetch('data/whale_trades.json', { cache: 'no-cache' })
-      .then((r) => r.json());
+    const f = await fetch('data/whale_trades.json', { cache: 'no-cache' }).then((r) => r.json());
     if (!f?.trades) return;
     state.snapshotMeta = f;
     for (const t of f.trades) addTrade(t, false);
-    // Report what we HAVE straight away. A browser websocket aimed at a
-    // blackholed IP can take ~75 seconds to fail, and sitting on "starting..."
-    // for that long reads as broken when the data is already on screen.
-    if (state.source !== 'live') {
-      state.source = 'snapshot';
-      refreshSourceLabel();
-    }
-  } catch { /* mid-deploy; the next tick retries */ }
+    if (state.source !== 'live') { state.source = 'snapshot'; refreshSourceLabel(); }
+  } catch { /* mid-deploy; next tick retries */ }
 }
 
 async function loadPositions() {
   try {
-    const p = await fetch('data/whale_positions.json', { cache: 'no-cache' })
-      .then((r) => r.json());
+    const p = await fetch('data/whale_positions.json', { cache: 'no-cache' }).then((r) => r.json());
     if (!p) return;
     state.positions = { open: p.open || [], recently_closed: p.recently_closed || [] };
     state.posMeta = p;
     if (state.view === 'positions') renderPositions();
-  } catch { /* mid-deploy; the next tick retries */ }
+    checkCopies();
+  } catch { /* mid-deploy; next tick retries */ }
 }
 
-/* ──────────────────────────── trades view ───────────────────────────── */
+/* ───────────────────────── my copies (localStorage) ─────────────────── */
+
+function loadCopies() {
+  try { state.copies = JSON.parse(lsGet(COPIES_KEY, '[]')) || []; }
+  catch { state.copies = []; }
+}
+function saveCopies() {
+  lsSet(COPIES_KEY, JSON.stringify(state.copies));
+  updateMineBadge();
+}
+
+function addCopy({ wallet, name, verdict, title, slug, outcome, price, stake }) {
+  const key = posKey(wallet, slug, title, outcome);
+  if (state.copies.some((c) => c.key === key)) return false;   // already tracking
+  state.copies.push({
+    key, wallet: (wallet || '').toLowerCase(), name, verdict,
+    title, slug, outcome,
+    entryPrice: price, stake,
+    shares: price > 0 ? stake / price : 0,
+    addedAt: Math.floor(Date.now() / 1000),
+  });
+  saveCopies();
+  checkCopies();
+  return true;
+}
+
+function removeCopy(key) {
+  state.copies = state.copies.filter((c) => c.key !== key);
+  saveCopies();
+  renderMine();
+}
+
+/** Match each copy against the whale's current positions. */
+function copyStatus(c) {
+  const openHit = state.positions.open.find((p) => posKey(p.wallet, p.slug, p.title, p.outcome) === c.key);
+  if (openHit) {
+    return { state: 'in', price: openHit.current_price, whalePos: openHit };
+  }
+  const closedHit = state.positions.recently_closed.find(
+    (p) => posKey(p.wallet, p.slug, p.title, p.outcome) === c.key);
+  if (closedHit) {
+    return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
+  }
+  // Not in either list. We simply cannot see it -- the whale may have closed it
+  // outside the 7-day window, or they may not be in the tracked set at all.
+  // Saying "unknown" is honest; claiming they exited would not be.
+  return { state: 'unknown' };
+}
+
+function checkCopies() {
+  let alerts = 0;
+  for (const c of state.copies) {
+    const st = copyStatus(c);
+    if (st.state === 'exited') {
+      alerts += 1;
+      if ($('#mine-notify')?.checked && !state.notified.has(c.key)
+          && Notification?.permission === 'granted') {
+        state.notified.add(c.key);
+        new Notification(`${c.name || short(c.wallet)} has EXITED`, {
+          body: `${c.title || ''} — they got out ${ago(st.exitedAt)} ago. You're still in.`,
+          tag: c.key,
+        });
+      }
+    }
+  }
+  updateMineBadge(alerts);
+  if (state.view === 'mine') renderMine();
+  return alerts;
+}
+
+function updateMineBadge(alerts) {
+  const b = $('#mine-badge');
+  if (!b) return;
+  const n = alerts ?? state.copies.filter((c) => copyStatus(c).state === 'exited').length;
+  b.hidden = !n;
+  b.textContent = String(n);
+}
+
+function copyButton(data) {
+  const already = state.copies.some(
+    (c) => c.key === posKey(data.wallet, data.slug, data.title, data.outcome));
+  const btn = el('button', `btn small ${already ? '' : 'copy'}`,
+    already ? '✓ Tracking' : 'Copy this');
+  if (already) btn.disabled = true;
+  btn.addEventListener('click', () => {
+    if (addCopy(data)) {
+      btn.textContent = '✓ Tracking';
+      btn.className = 'btn small';
+      btn.disabled = true;
+    }
+  });
+  return btn;
+}
+
+/* ──────────────────────────── live buys ─────────────────────────────── */
 
 function visibleTrades() {
   const min = Number($('#t-min').value) || 0;
   return state.trades
     .filter((t) => {
       if (t.usd < min) return false;
-      if (state.who === 'best')
-        return t.verdict === 'CANDIDATE' || t.verdict === 'WATCH';
+      if (state.who === 'best') return t.verdict === 'CANDIDATE' || t.verdict === 'WATCH';
       if (state.who === 'all') return !!t.verdict;
-      return !isChurn(t);   // "everyone" still drops 5-minute crypto churn
+      return !isChurn(t);
     })
     .sort((a, b) => b.ts - a.ts)
     .slice(0, MAX_ROWS);
@@ -312,15 +394,16 @@ function renderTrades() {
     list.textContent = '';
     empty.hidden = false;
     empty.textContent = state.trades.length
-      ? `No fills match — ${state.trades.length} loaded, all filtered out. `
-        + 'Lower "min $" or widen the selection.'
-      : (state.source === 'live' ? 'Connected. Waiting for fills…' : 'Loading…');
+      ? `Nothing above $${$('#t-min').value} right now — ${state.trades.length} smaller bets `
+        + 'were filtered out. Lower "Min bet" to see more.'
+      : (state.source === 'live' ? 'Connected. Waiting for bets…' : 'Loading…');
     return;
   }
   empty.hidden = true;
 
   const frag = document.createDocumentFragment();
   for (const t of rows) {
+    const combo = isCombo(t);
     const fresh = t.live && (Date.now() / 1000 - t.ts) < 90;
     const li = el('li', `row${fresh ? ' fresh' : ''}`);
 
@@ -329,52 +412,45 @@ function renderTrades() {
     const card = state.byWallet.get(t.wallet);
     if (card) nm.addEventListener('click', () => openDrawer(card));
     who.appendChild(nm);
-    if (t.verdict) {
-      who.appendChild(el('span',
-        `v v-${t.verdict === 'NOT COPYABLE' ? 'NOT' : t.verdict}`, t.verdict));
-    }
-    if (t.discovered) who.appendChild(el('span', 'tag', 'OFF-BOARD'));
+    if (t.verdict) who.appendChild(verdictPill(t.verdict));
+    if (combo) who.appendChild(el('span', 'tag', 'PARLAY'));
     li.appendChild(who);
 
-    const combo = isCombo(t);
-    const mid = el('div');
-    mid.style.cssText = 'font-size:13px;color:var(--dim)';
-    mid.appendChild(el('span', `side ${t.side}`, t.side));
-    mid.appendChild(document.createTextNode(
-      combo ? ' combo bet' : ` ${t.outcome || ''} @ ${t.price.toFixed(3)}`));
-    if (combo) mid.appendChild(el('span', 'tag', 'MULTI-LEG'));
-    li.appendChild(mid);
-
     const right = el('div');
-    right.style.textAlign = 'right';
-    right.appendChild(el('div', 'amt', money(t.usd)));
-    right.appendChild(el('div', 'when', `${ago(t.ts)} ago`));
+    right.appendChild(el('div', 'headline-num', money(t.usd)));
+    right.appendChild(el('div', 'headline-sub', `${ago(t.ts)} ago`));
     li.appendChild(right);
+
+    // plain sentence rather than a row of symbols
+    const says = el('div', 'says');
+    const sideSpan = el('span', `side ${t.side}`, t.side === 'BUY' ? 'BOUGHT' : 'SOLD');
+    says.appendChild(sideSpan);
+    says.appendChild(document.createTextNode(combo
+      ? ' a multi-market parlay'
+      : ` "${t.outcome || '?'}" at ${(t.price * 100).toFixed(0)}¢`));
+    li.appendChild(says);
 
     const mk = el('div', 'mkt');
     mk.appendChild(marketLink(t.title, t.slug));
     li.appendChild(mk);
 
-    // The one thing that answers "how much should I have bet": a flat mirror
-    // stake (not scaled to the whale's size -- their $50k bet is not a signal
-    // that YOU should bet $50k) sized against the price on this print. This is
-    // the price they got, not the price a delayed follower would actually get
-    // -- said plainly, not left implied.
-    //
-    // Combo bets get their own message rather than a share count: Polymarket
-    // lets you AND several independent markets into one wager, there is no
-    // single "outcome" to buy shares of, and a real follower cannot cheaply
-    // reconstruct someone else's specific N-leg parlay.
     if (combo) {
-      const mirror = el('div', 'mirror',
-        'combo bet across multiple markets — not something a single mirror trade can reproduce');
-      li.appendChild(mirror);
+      li.appendChild(el('div', 'mirror',
+        'A parlay bundles several markets into one bet — a single copy trade cannot reproduce it.'));
     } else if (t.price > 0 && t.price < 1) {
       const shares = stake / t.price;
       const mirror = el('div', 'mirror');
-      mirror.innerHTML = `mirror @ $${stake}: <b>~${shares.toFixed(shares < 10 ? 1 : 0)} sh</b> `
-        + `of "${t.outcome}" — at THEIR price; arriving late you would likely pay more`;
+      mirror.innerHTML = `To copy at $${stake} you'd buy <b>${shares.toFixed(shares < 10 ? 1 : 0)} shares</b> `
+        + `— that's their price. Arriving later you'll likely pay more.`;
       li.appendChild(mirror);
+
+      const actions = el('div', 'actions');
+      actions.appendChild(copyButton({
+        wallet: t.wallet, name: t.name, verdict: t.verdict,
+        title: t.title, slug: t.slug, outcome: t.outcome,
+        price: t.price, stake,
+      }));
+      li.appendChild(actions);
     }
 
     frag.appendChild(li);
@@ -383,75 +459,78 @@ function renderTrades() {
   list.appendChild(frag);
 }
 
-/* ─────────────────────────── positions view ──────────────────────────── */
-
-function visiblePositions() {
-  const { open, recently_closed } = state.positions;
-  if (state.posFilter === 'open') return { open, closed: [] };
-  if (state.posFilter === 'closed') return { open: [], closed: recently_closed };
-  return { open, closed: recently_closed };
-}
+/* ────────────────────────── what they hold ──────────────────────────── */
 
 function renderPositions() {
-  const { open, closed } = visiblePositions();
+  const { open, recently_closed } = state.positions;
+  const showOpen = state.posFilter !== 'closed';
+  const showClosed = state.posFilter !== 'open';
+  const rows = [
+    ...(showOpen ? open.map((p) => ({ ...p, _open: true })) : []),
+    ...(showClosed ? recently_closed.map((p) => ({ ...p, _open: false })) : []),
+  ];
+
   const list = $('#positions');
   const empty = $('#positions-empty');
   list.textContent = '';
-
   renderPositionStats();
 
-  const rows = [...open.map((p) => ({ ...p, _open: true })),
-                ...closed.map((p) => ({ ...p, _open: false }))];
   if (!rows.length) {
     empty.hidden = false;
-    empty.textContent = state.posMeta ? 'Nothing to show for this filter.' : 'Loading…';
+    empty.textContent = state.posMeta ? 'Nothing here for this filter.' : 'Loading…';
     return;
   }
   empty.hidden = true;
 
   const frag = document.createDocumentFragment();
-  for (const p of rows) {
-    const li = el('li', 'row poscard');
+  for (const p of rows.slice(0, 250)) {
+    const li = el('li', 'row');
 
     const who = el('div', 'who');
     const nm = el('span', 'nm', p.name || short(p.wallet));
     const card = state.byWallet.get((p.wallet || '').toLowerCase());
     if (card) nm.addEventListener('click', () => openDrawer(card));
     who.appendChild(nm);
-    if (p.verdict) {
-      who.appendChild(el('span',
-        `v v-${p.verdict === 'NOT COPYABLE' ? 'NOT' : p.verdict}`, p.verdict));
-    }
+    if (p.verdict) who.appendChild(verdictPill(p.verdict));
+    who.appendChild(el('span', `pstatus ${p._open ? 'open' : 'exited'}`,
+      p._open ? 'STILL HOLDING' : 'GOT OUT'));
     li.appendChild(who);
 
-    li.appendChild(el('span', `pstatus ${p._open ? 'open' : 'exited'}`,
-      p._open ? 'STILL IN' : 'EXITED'));
+    const pnl = p._open ? p.unrealized_pnl : p.realized_pnl;
+    const right = el('div');
+    right.appendChild(el('div', `headline-num ${sign(pnl)}`, money(pnl)));
+    right.appendChild(el('div', 'headline-sub',
+      p._open ? 'on paper' : `banked ${ago(p.last_event_at)} ago`));
+    li.appendChild(right);
+
+    const says = el('div', 'says');
+    says.innerHTML = p.outcome
+      ? `Backing <b>${p.outcome}</b> — bought in at <b>${((p.avg_price || 0) * 100).toFixed(0)}¢</b>`
+        + (p._open && p.current_price
+          ? `, now <b>${(p.current_price * 100).toFixed(0)}¢</b>` : '')
+      : 'Multi-market position';
+    li.appendChild(says);
 
     const mk = el('div', 'mkt');
     mk.appendChild(marketLink(p.title, p.slug));
-    if (p.outcome) mk.appendChild(document.createTextNode(`  ·  ${p.outcome}`));
     li.appendChild(mk);
 
-    const meta = el('div', 'pmeta');
-    const bit = (label, val) => {
-      const s = el('span', null, `${label} `);
-      s.appendChild(el('b', null, val));
-      meta.appendChild(s);
-    };
-    bit('entry', p.avg_price != null ? `$${Number(p.avg_price).toFixed(3)}` : '—');
-    if (p._open) {
-      bit('now', p.current_price != null ? `$${Number(p.current_price).toFixed(3)}` : '—');
-      bit('unrealized', money(p.unrealized_pnl));
-      bit('since', `${ago(p.last_event_at)} ago`);
-    } else {
-      bit('realized', money(p.realized_pnl));
-      bit('exited', `${ago(p.last_event_at)} ago`);
-    }
     if (p.likely_hedge_residue) {
-      meta.appendChild(el('span', 'hedge-flag',
-        'possible hedge residue, not a chosen price'));
+      li.appendChild(el('div', 'why',
+        'Bought at exactly 50¢ on a linked multi-outcome market — this is usually left over '
+        + 'from a hedge conversion, not a price they actively chose.'));
     }
-    li.appendChild(meta);
+
+    if (p._open && p.outcome) {
+      const actions = el('div', 'actions');
+      actions.appendChild(copyButton({
+        wallet: p.wallet, name: p.name, verdict: p.verdict,
+        title: p.title, slug: p.slug, outcome: p.outcome,
+        price: p.current_price || p.avg_price,
+        stake: Number($('#t-stake')?.value) || 25,
+      }));
+      li.appendChild(actions);
+    }
 
     frag.appendChild(li);
   }
@@ -467,12 +546,123 @@ function renderPositionStats() {
     d.appendChild(el('div', 'v', v));
     box.appendChild(d);
   };
-  add('currently holding', String(state.positions.open.length));
-  add('exited (7d)', String(state.positions.recently_closed.length));
-  if (state.posMeta?.generated_at) add('refreshed', `${ago(state.posMeta.generated_at)} ago`);
+  add('Still holding', String(state.positions.open.length));
+  add('Got out (7 days)', String(state.positions.recently_closed.length));
+  if (state.posMeta?.generated_at) add('Updated', `${ago(state.posMeta.generated_at)} ago`);
 }
 
-/* ──────────────────────────── whales view ───────────────────────────── */
+/* ───────────────────────────── my copies ────────────────────────────── */
+
+function renderMine() {
+  const list = $('#mine');
+  const empty = $('#mine-empty');
+  const alertBox = $('#mine-alerts');
+  list.textContent = '';
+  alertBox.textContent = '';
+
+  const statBox = $('#mine-stats');
+  statBox.textContent = '';
+  const add = (k, v, cls) => {
+    const d = el('div', 'stat');
+    d.appendChild(el('div', 'k', k));
+    d.appendChild(el('div', `v ${cls || ''}`, v));
+    statBox.appendChild(d);
+  };
+
+  if (!state.copies.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+
+  const rows = state.copies.map((c) => ({ c, st: copyStatus(c) }));
+  const exited = rows.filter((r) => r.st.state === 'exited');
+  const stillIn = rows.filter((r) => r.st.state === 'in');
+
+  add('Copies tracked', String(state.copies.length));
+  add('Whale still in', String(stillIn.length));
+  add('Whale got out', String(exited.length), exited.length ? 'neg' : '');
+
+  if (exited.length) {
+    const banner = el('div', 'callout warn');
+    banner.innerHTML = `<b>⚠ ${exited.length} whale${exited.length > 1 ? 's have' : ' has'} `
+      + `exited a position you copied.</b> They're out and you may still be in. `
+      + `This is a fact about what they did — not advice that you should follow.`;
+    alertBox.appendChild(banner);
+  }
+
+  // exited first — that's the thing you need to see
+  rows.sort((a, b) => {
+    const rank = (s) => (s === 'exited' ? 0 : s === 'in' ? 1 : 2);
+    return rank(a.st.state) - rank(b.st.state);
+  });
+
+  const frag = document.createDocumentFragment();
+  for (const { c, st } of rows) {
+    const li = el('li', `row${st.state === 'exited' ? ' alert' : ''}`);
+
+    if (st.state === 'exited') {
+      li.appendChild(el('div', 'alert-banner',
+        `⚠ ${c.name || short(c.wallet)} GOT OUT ${ago(st.exitedAt)} ago — you may still be in.`));
+    }
+
+    const who = el('div', 'who');
+    who.appendChild(el('span', 'nm', c.name || short(c.wallet)));
+    if (c.verdict) who.appendChild(verdictPill(c.verdict));
+    who.appendChild(el('span',
+      `pstatus ${st.state === 'in' ? 'open' : 'exited'}`,
+      st.state === 'in' ? 'THEY\'RE STILL IN' : st.state === 'exited' ? 'THEY\'RE OUT' : 'CAN\'T SEE'));
+    li.appendChild(who);
+
+    // your own P&L on the copy, if we can price it
+    const nowPrice = st.price ?? null;
+    const right = el('div');
+    if (nowPrice != null && c.entryPrice > 0) {
+      const myPnl = c.shares * (nowPrice - c.entryPrice);
+      right.appendChild(el('div', `headline-num ${sign(myPnl)}`, money(myPnl)));
+      right.appendChild(el('div', 'headline-sub', 'your paper P&L'));
+    } else {
+      right.appendChild(el('div', 'headline-num mut', money(c.stake)));
+      right.appendChild(el('div', 'headline-sub', 'you staked'));
+    }
+    li.appendChild(right);
+
+    const says = el('div', 'says');
+    says.innerHTML = `You backed <b>${c.outcome || '?'}</b> at `
+      + `<b>${((c.entryPrice || 0) * 100).toFixed(0)}¢</b> with `
+      + `<b>${money(c.stake)}</b> (${(c.shares || 0).toFixed(c.shares < 10 ? 1 : 0)} shares)`
+      + (nowPrice != null ? ` · now <b>${(nowPrice * 100).toFixed(0)}¢</b>` : '');
+    li.appendChild(says);
+
+    const mk = el('div', 'mkt');
+    mk.appendChild(marketLink(c.title, c.slug));
+    li.appendChild(mk);
+
+    if (st.state === 'unknown') {
+      li.appendChild(el('div', 'why',
+        "This position isn't in the whale's currently-tracked holdings or their last 7 days of "
+        + 'exits, so their status genuinely cannot be confirmed right now — not the same as them '
+        + 'having got out.'));
+    }
+
+    const actions = el('div', 'actions');
+    const del = el('button', 'btn small', 'Remove');
+    del.addEventListener('click', () => removeCopy(c.key));
+    actions.appendChild(del);
+    const card = state.byWallet.get(c.wallet);
+    if (card) {
+      const view = el('button', 'btn small', 'Their record');
+      view.addEventListener('click', () => openDrawer(card));
+      actions.appendChild(view);
+    }
+    li.appendChild(actions);
+
+    frag.appendChild(li);
+  }
+  list.appendChild(frag);
+}
+
+/* ──────────────────────── who to follow (board) ─────────────────────── */
 
 const ORDER = { CANDIDATE: 0, WATCH: 1, FRAGILE: 2, 'NOT COPYABLE': 3, INSUFFICIENT: 4 };
 const isGood = (c) => c.verdict === 'CANDIDATE' || c.verdict === 'WATCH';
@@ -482,7 +672,10 @@ function renderBoard() {
   let rows = state.whales.filter((c) => {
     if (state.verdict === 'good' && !isGood(c)) return false;
     if (state.verdict && state.verdict !== 'good' && c.verdict !== state.verdict) return false;
-    if (state.category && c.category !== state.category) return false;
+    if (state.category) {
+      const cats = c.lb_categories || [];
+      if (!cats.includes(state.category) && c.category !== state.category) return false;
+    }
     return true;
   });
 
@@ -490,9 +683,10 @@ function renderBoard() {
   if (sortKey === 'lb_day_pnl' || sortKey === 'lb_week_pnl') {
     const have = rows.filter((c) => c[sortKey] != null).length;
     hint.hidden = false;
-    hint.textContent = `${have} of ${rows.length} shown wallets appeared on that leaderboard `
-      + `window; the rest sort to the bottom. This is Polymarket's own raw number, `
-      + `not re-verified by the screen.`;
+    hint.textContent = `${have} of these ${rows.length} appeared on Polymarket's `
+      + `${sortKey === 'lb_day_pnl' ? 'daily' : 'weekly'} leaderboard — the rest sort to the `
+      + `bottom. That figure is Polymarket's own, over a short window, so it's noisier than the `
+      + `overall rating.`;
     rows.sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       if (av == null && bv == null) return 0;
@@ -512,7 +706,7 @@ function renderBoard() {
       const av = a[sortKey], bv = b[sortKey];
       if (av == null) return 1;
       if (bv == null) return -1;
-      return sortKey === 'max_dd_usd' ? av - bv : bv - av;
+      return bv - av;
     });
   }
 
@@ -524,39 +718,45 @@ function renderBoard() {
   const frag = document.createDocumentFragment();
   rows.slice(0, 200).forEach((c, i) => {
     const li = el('li', 'row');
-    li.appendChild(el('div', 'rank', String(i + 1)));
 
     const who = el('div', 'who');
+    who.appendChild(el('span', 'rank', String(i + 1)));
     const nm = el('span', 'nm', c.name || short(c.wallet));
     nm.addEventListener('click', () => openDrawer(c));
     who.appendChild(nm);
-    if (c.category) who.appendChild(el('span', 'tag', CAT_LABEL[c.category] || c.category));
-    if (c.discovered) who.appendChild(el('span', 'tag', 'OFF-BOARD'));
+    who.appendChild(verdictPill(c.verdict));
+    const cat = catOf(c);
+    if (cat && CAT_LABEL[cat]) who.appendChild(el('span', 'tag', CAT_LABEL[cat]));
+    if (c.discovered) who.appendChild(el('span', 'tag plain', 'off-leaderboard'));
     li.appendChild(who);
 
-    const amtVal = (sortKey === 'lb_day_pnl' || sortKey === 'lb_week_pnl')
-      && c[sortKey] != null ? c[sortKey] : c.position_pnl;
-    li.appendChild(el('div', `amt ${sign(amtVal)}`, money(amtVal)));
-    li.appendChild(el('span',
-      `v v-${c.verdict === 'NOT COPYABLE' ? 'NOT' : c.verdict}`, c.verdict));
+    const showWindow = (sortKey === 'lb_day_pnl' || sortKey === 'lb_week_pnl')
+      && c[sortKey] != null;
+    const headline = showWindow ? c[sortKey] : c.position_pnl;
+    const right = el('div');
+    right.appendChild(el('div', `headline-num ${sign(headline)}`, money(headline)));
+    right.appendChild(el('div', 'headline-sub',
+      showWindow ? (sortKey === 'lb_day_pnl' ? 'made today' : 'made this week') : 'total profit'));
+    li.appendChild(right);
 
-    const m = el('div', 'metrics');
-    const bit = (label, val) => {
-      const s = el('span', null, `${label} `);
-      s.appendChild(el('b', null, val));
-      m.appendChild(s);
+    // plain-English facts instead of a jargon strip
+    const facts = el('div', 'facts');
+    const f = (k, v, cls) => {
+      const d = el('div', 'f');
+      d.appendChild(el('div', 'fk', k));
+      d.appendChild(el('div', `fv ${cls || ''}`, v));
+      facts.appendChild(d);
     };
-    bit('max DD', money(c.max_dd_usd));
-    bit('net/DD', c.net_dd == null ? '—' : c.net_dd.toFixed(1));
-    bit('months +', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
-    bit('fills', (c.trade_count || 0).toLocaleString());
-    if (c.lb_day_pnl != null) bit('today', money(c.lb_day_pnl));
-    if (c.lb_week_pnl != null) bit('this wk', money(c.lb_week_pnl));
-    li.appendChild(m);
+    f('Worst drop', money(c.max_dd_usd), 'neg');
+    f('Profit per $1 risked', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(1)}`);
+    f('Winning months', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
+    f('Bets placed', (c.trade_count || 0).toLocaleString());
+    if (c.lb_day_pnl != null && !showWindow) f('Today', money(c.lb_day_pnl), sign(c.lb_day_pnl));
+    li.appendChild(facts);
 
     if (c.flags?.length) {
-      li.appendChild(el('div', 'why',
-        c.flags[0] + (c.flags.length > 1 ? `  (+${c.flags.length - 1} more)` : '')));
+      li.appendChild(el('div', 'why', c.flags[0]
+        + (c.flags.length > 1 ? `  (+${c.flags.length - 1} more — tap the name)` : '')));
     }
     frag.appendChild(li);
   });
@@ -575,11 +775,18 @@ function renderBoardStats(rows) {
     d.appendChild(el('div', 'v', val));
     box.appendChild(d);
   };
-  add('scored', String(state.whales.length));
-  add('worth watching', String((v.CANDIDATE || 0) + (v.WATCH || 0)));
-  add('shown now', String(rows.length));
-  add('off-leaderboard', String(state.whales.filter((c) => c.discovered).length));
-  if (state.meta?.generated_at) add('refreshed', `${ago(state.meta.generated_at)} ago`);
+  add('Worth following', String((v.CANDIDATE || 0) + (v.WATCH || 0)));
+  add('Showing', String(rows.length));
+  add('Checked in total', String(state.whales.length));
+  if (state.meta?.generated_at) add('Updated', `${ago(state.meta.generated_at)} ago`);
+
+  const intro = $('#w-intro');
+  if (intro) {
+    intro.textContent = `Out of ${state.whales.length} traders checked, `
+      + `${(v.CANDIDATE || 0) + (v.WATCH || 0)} are worth following and `
+      + `${(v['NOT COPYABLE'] || 0)} were ruled out — mostly market makers whose prices you `
+      + `can't get, or one lucky bet dressed up as a track record.`;
+  }
 }
 
 /* ───────────────────────────── drawer ───────────────────────────────── */
@@ -589,11 +796,11 @@ function openDrawer(c) {
   b.textContent = '';
   b.appendChild(el('h2', 'dh', c.name || short(c.wallet)));
   b.appendChild(el('p', 'dsub', c.wallet));
-  b.appendChild(el('span',
-    `v v-${c.verdict === 'NOT COPYABLE' ? 'NOT' : c.verdict}`, c.verdict));
-  if (c.category) {
-    const t = el('span', 'tag', `mostly ${CAT_LABEL[c.category] || c.category}`);
-    t.style.marginLeft = '8px';
+  b.appendChild(verdictPill(c.verdict));
+  const cat = catOf(c);
+  if (cat && CAT_LABEL[cat]) {
+    const t = el('span', 'tag', `mostly ${CAT_LABEL[cat]}`);
+    t.style.marginLeft = '9px';
     b.appendChild(t);
   }
 
@@ -604,44 +811,43 @@ function openDrawer(c) {
     d.appendChild(el('div', `val ${cls || ''}`, v));
     grid.appendChild(d);
   };
-  cell('Profit', money(c.position_pnl), sign(c.position_pnl));
-  cell('Max drawdown', money(c.max_dd_usd), 'neg');
-  cell('Net / DD', c.net_dd == null ? '—' : c.net_dd.toFixed(2));
-  cell('Realized trading', money(c.realized_market_pnl), sign(c.realized_market_pnl));
-  cell('Unrealized', money(c.unrealized_pnl), sign(c.unrealized_pnl));
+  cell('Total profit', money(c.position_pnl), sign(c.position_pnl));
+  cell('Worst drop', money(c.max_dd_usd), 'neg');
+  cell('Profit per $1 risked', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(2)}`);
+  cell('Winning months', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
+  cell('Bets placed', (c.trade_count || 0).toLocaleString());
+  cell('Biggest single win', money(c.biggest_win));
+  cell('% from one bet', pct(c.concentration));
+  cell('Cash banked', money(c.realized_market_pnl), sign(c.realized_market_pnl));
+  cell('Still on paper', money(c.unrealized_pnl), sign(c.unrealized_pnl));
   cell('Rebates / rewards', money(c.program_income), 'mut');
-  cell('Biggest win', money(c.biggest_win));
-  cell('Concentration', pct(c.concentration));
-  cell('Volume', money(c.volume_usdc));
-  cell('Edge per $', c.edge_per_dollar == null ? '—' : pct(c.edge_per_dollar, 2));
+  cell('Total traded', money(c.volume_usdc));
+  cell('Profit per $ traded', c.edge_per_dollar == null ? '—' : pct(c.edge_per_dollar, 2));
   cell('Fees paid', money(c.fees_paid), 'neg');
-  cell('Fills', (c.trade_count || 0).toLocaleString());
-  cell('Months positive', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
-  if (c.lb_day_pnl != null) cell('Today (leaderboard)', money(c.lb_day_pnl), sign(c.lb_day_pnl));
-  if (c.lb_week_pnl != null) cell('This week (leaderboard)', money(c.lb_week_pnl), sign(c.lb_week_pnl));
-  cell('Curve days', String(c.curve_days ?? '—'));
-  cell('Idle days', c.days_idle == null ? '—' : String(c.days_idle));
+  if (c.lb_day_pnl != null) cell('Made today', money(c.lb_day_pnl), sign(c.lb_day_pnl));
+  if (c.lb_week_pnl != null) cell('Made this week', money(c.lb_week_pnl), sign(c.lb_week_pnl));
+  cell('Days of history', String(c.curve_days ?? '—'));
+  cell('Days since a bet', c.days_idle == null ? '—' : String(c.days_idle));
   b.appendChild(grid);
 
-  const openPos = state.positions.open.filter(
+  const mine = (arr) => arr.filter(
     (p) => (p.wallet || '').toLowerCase() === (c.wallet || '').toLowerCase());
-  const closedPos = state.positions.recently_closed.filter(
-    (p) => (p.wallet || '').toLowerCase() === (c.wallet || '').toLowerCase());
+  const openPos = mine(state.positions.open);
+  const closedPos = mine(state.positions.recently_closed);
   if (openPos.length || closedPos.length) {
     b.appendChild(el('div', 'sec', 'Positions right now'));
-    for (const p of openPos.slice(0, 5)) {
+    for (const p of openPos.slice(0, 6)) {
       const row = el('div');
-      row.style.cssText = 'font-size:12.5px;color:var(--dim);margin-bottom:4px';
-      row.innerHTML = `<span class="pstatus open">STILL IN</span> `
-        + `${p.title || ''} — entry $${(p.avg_price ?? 0).toFixed(3)}, `
-        + `unrealized ${money(p.unrealized_pnl)}`;
+      row.style.cssText = 'font-size:15px;color:var(--dim);margin-bottom:7px;line-height:1.5';
+      row.innerHTML = `<span class="pstatus open">HOLDING</span> ${p.title || ''} — `
+        + `in at ${((p.avg_price || 0) * 100).toFixed(0)}¢, ${money(p.unrealized_pnl)} on paper`;
       b.appendChild(row);
     }
-    for (const p of closedPos.slice(0, 5)) {
+    for (const p of closedPos.slice(0, 6)) {
       const row = el('div');
-      row.style.cssText = 'font-size:12.5px;color:var(--dim);margin-bottom:4px';
-      row.innerHTML = `<span class="pstatus exited">EXITED</span> `
-        + `${p.title || ''} — realized ${money(p.realized_pnl)}, ${ago(p.last_event_at)} ago`;
+      row.style.cssText = 'font-size:15px;color:var(--dim);margin-bottom:7px;line-height:1.5';
+      row.innerHTML = `<span class="pstatus exited">GOT OUT</span> ${p.title || ''} — `
+        + `banked ${money(p.realized_pnl)}, ${ago(p.last_event_at)} ago`;
       b.appendChild(row);
     }
   }
@@ -654,12 +860,12 @@ function openDrawer(c) {
   }
 
   if (c.monthly?.length) {
-    b.appendChild(el('div', 'sec', 'Monthly P&L'));
+    b.appendChild(el('div', 'sec', 'Month by month'));
     const max = Math.max(...c.monthly.map((m) => Math.abs(m.pnl)), 1);
     const bars = el('div', 'bars');
     c.monthly.forEach((m) => {
       const bar = el('div', `b ${m.pnl >= 0 ? 'up' : 'dn'}`);
-      bar.style.height = `${Math.max(2, (Math.abs(m.pnl) / max) * 100)}%`;
+      bar.style.height = `${Math.max(3, (Math.abs(m.pnl) / max) * 100)}%`;
       bar.title = `${m.month}: ${money(m.pnl)}`;
       bars.appendChild(bar);
     });
@@ -670,10 +876,10 @@ function openDrawer(c) {
     b.appendChild(ax);
   }
 
-  const link = el('a', null, 'Open profile on Polymarket ↗');
+  const link = el('a', null, 'Open their Polymarket profile ↗');
   link.href = `https://polymarket.com/profile/${c.wallet}`;
   link.target = '_blank'; link.rel = 'noopener noreferrer';
-  link.style.cssText = 'display:inline-block;margin-top:22px;color:var(--blue)';
+  link.style.cssText = 'display:inline-block;margin-top:26px';
   b.appendChild(link);
 
   $('#drawer').hidden = false;
@@ -685,13 +891,10 @@ function renderMethod() {
   const m = $('#method');
   if (!m || !state.whales.length) return;
   m.textContent = '';
-
   const rankable = state.whales.filter((c) => c.rankable);
   const richest = [...state.whales].sort((a, b) => b.position_pnl - a.position_pnl)[0];
   const mm = rankable.filter((c) => c.program_share > 0.15)
     .sort((a, b) => b.position_pnl - a.position_pnl)[0];
-  const best = rankable.filter((c) => c.verdict === 'CANDIDATE')
-    .sort((a, b) => (b.net_dd ?? 0) - (a.net_dd ?? 0))[0];
   const failed = state.whales.filter(
     (c) => c.verdict === 'NOT COPYABLE' || c.verdict === 'INSUFFICIENT').length;
   const degen = state.whales.filter((c) => (c.curve_moves ?? 99) < 10).length;
@@ -699,132 +902,81 @@ function renderMethod() {
   const p = (html) => { const n = el('p'); n.innerHTML = html; m.appendChild(n); };
   const h = (t) => m.appendChild(el('h3', null, t));
 
-  p(`A profit leaderboard is a <b>sorted in-sample pool</b>. It ranks people by an
-     outcome that was partly luck, and rank on such a pool carries no forward
-     information. Of <b>${state.whales.length}</b> wallets scored here,
-     <b>${failed}</b> fail the screen.`);
-
+  p(`A profit leaderboard ranks people by an outcome that was partly luck, so being
+     top of it does not predict tomorrow. Of <b>${state.whales.length}</b> traders
+     checked here, <b>${failed}</b> are ruled out.`);
   if (richest) {
     p(`The current top earner is <b>${richest.name || short(richest.wallet)}</b> at
-       <b>${money(richest.position_pnl)}</b> — of which
-       <b>${pct(richest.concentration)}</b> came from a single position, over
-       <b>${(richest.trade_count || 0).toLocaleString()}</b> fills, with
-       <b>${(richest.pct_positive_months ?? 0).toFixed(0)}%</b> of months positive
-       and a <b>${money(richest.max_dd_usd)}</b> peak-to-trough.`);
+       <b>${money(richest.position_pnl)}</b> — but <b>${pct(richest.concentration)}</b> of
+       that came from a single bet, and only
+       <b>${(richest.pct_positive_months ?? 0).toFixed(0)}%</b> of their months were
+       profitable. That is a lottery ticket, not a method.`);
   }
   if (mm) {
-    p(`<b>${mm.name || short(mm.wallet)}</b> looks better on consistency —
-       <b>${(mm.pct_positive_months ?? 0).toFixed(0)}%</b> of months positive over
-       <b>${(mm.trade_count || 0).toLocaleString()}</b> fills. But
-       <b>${pct(mm.program_share)}</b> of that profit is rebates and liquidity
-       rewards at a <b>${pct(mm.edge_per_dollar, 1)}</b> edge per dollar traded:
-       a market maker. You cannot follow someone into a quote.`);
-  }
-  if (best) {
-    p(`The best <i>screened</i> wallet is <b>${best.name || short(best.wallet)}</b> —
-       net/drawdown <b>${(best.net_dd ?? 0).toFixed(1)}</b>,
-       <b>${(best.pct_positive_months ?? 0).toFixed(0)}%</b> of months positive,
-       concentration <b>${pct(best.concentration)}</b>${best.discovered
-      ? ', and it appears on <b>no leaderboard</b> — it was found by walking the top '
-        + 'holders of liquid markets' : ''}.`);
+    p(`<b>${mm.name || short(mm.wallet)}</b> looks steadier —
+       <b>${(mm.pct_positive_months ?? 0).toFixed(0)}%</b> winning months. But
+       <b>${pct(mm.program_share)}</b> of that profit is rebates for providing liquidity,
+       not bets you could copy. They are a market maker: they earn the spread you would
+       have to pay.`);
   }
 
-  h('What is scored');
+  h('What "worth following" actually means');
   const ul = el('ul');
-  [['Net / max drawdown', 'profit per dollar of peak-to-trough pain, measured on a '
-    + 'mark-inclusive curve so open-position pain counts'],
-  ['Concentration', 'share of lifetime profit from the single best position — one '
-    + 'bet, or a process?'],
-  ['Rebates and rewards', 'money that accrues to market-making, none of which '
-    + 'transfers to someone copying the trades'],
-  ['Edge per dollar traded', 'above ~20% is a concentrated directional bettor; below '
-    + '~3% on huge volume is a spread grinder'],
-  ['Months positive', 'the cheapest separator between an edge and a jackpot']]
+  [['Profit per $1 risked', 'how much they made for every dollar their account fell '
+    + 'from its peak. Rewards steadiness, not size.'],
+  ['% from one bet', 'if most of the profit came from a single wager, the record is '
+    + 'one lucky call rather than a repeatable process.'],
+  ['Rebates and rewards', 'money earned for providing liquidity. Real income, but none '
+    + 'of it transfers to someone copying the trades.'],
+  ['Winning months', 'the cheapest way to tell an edge from a jackpot.']]
     .forEach(([k, v]) => {
-      const li = el('li');
-      li.innerHTML = `<b>${k}</b> — ${v}`;
-      ul.appendChild(li);
+      const li = el('li'); li.innerHTML = `<b>${k}</b> — ${v}`; ul.appendChild(li);
     });
   m.appendChild(ul);
 
-  h('Positions and exits');
-  p(`The <b>Positions</b> tab shows what each screened whale is currently holding
-     and what they exited in roughly the last week, read from Polymarket's own
-     ledger. The default rule offered there is <b>exit when they exit</b> —
-     that is real, checkable data. It is <b>not yet proven to be the right
-     rule</b>: a first pass at simulating naive entry/exit mirroring on this
-     project's own fill tape was dominated by fee drag and by longshot
-     positions that were simply held to resolution rather than by genuine
-     timing skill. Treat the Positions tab as visibility, not a signal.`);
+  h('About copying exits');
+  p(`<b>My copies</b> warns you when a whale leaves a position you took. That warning is
+     a fact — it is read from Polymarket's records. It is <b>not</b> proof that leaving
+     when they leave is profitable. A first simulation of naive copy-in/copy-out on this
+     project's own data was dominated by trading fees and by cheap longshots simply held
+     to settlement, not by good timing. Treat it as information, not instruction.`);
 
-  h('Today / this week / by category');
-  p(`The Whales board can sort by Polymarket's own day and week leaderboard
-     PnL, and filter by the category a wallet mostly trades (crypto, sports,
-     politics, macro) inferred from their recent fills. These are useful for
-     finding who is active RIGHT NOW, but they are a shorter, noisier sample
-     than the all-time screen — a wallet can have a great day by luck alone.`);
-
-  h('Two traps it is hardened against');
-  p(`<b>The equity curve does not start at zero.</b> One wallet's series opens
-     already six figures down, so seeding the high-water mark at the first
-     observation erases its entire inception drawdown and reports a riskless-looking
-     <code>max DD = $0</code>.`);
-  p(`<b>Some curves are fake.</b> The API sometimes back-fills a flat line. Zero
-     variance means zero drawdown means an <i>infinite</i> net/DD, which sorts
-     straight to the top of a risk-first ranking. <b>${degen}</b> of the wallets
-     here have such a curve and are refused a rank.`);
+  h('Two traps this is hardened against');
+  p(`<b>Accounts don't start at zero.</b> One trader's history opens already six figures
+     down. Measuring their worst drop from the first point we can see would erase that
+     loss entirely and make them look risk-free.`);
+  p(`<b>Some histories are fake-flat.</b> The API sometimes returns a straight line. No
+     movement means no measurable drop, which would rank that trader as infinitely safe.
+     <b>${degen}</b> here have such a history and are refused a rating.`);
 
   h('What this is not');
-  p(`It is not a buy signal, and there is no execution code anywhere in it. A high
-     rank means "worth forward-testing", not "worth money". Past PnL rank has no
-     demonstrated forward information, and the honest next step is to track a
-     shortlist forward and find out.`);
+  p(`It is not a buy signal and there is no trading code in it. A high rating means
+     "worth watching closely", not "worth money".`);
 }
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
+const VIEWS = ['whales', 'trades', 'positions', 'mine'];
 document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.segbtn').forEach((x) => x.classList.remove('active'));
   b.classList.add('active');
   state.view = b.dataset.view;
-  $('#view-trades').hidden = state.view !== 'trades';
-  $('#view-positions').hidden = state.view !== 'positions';
-  $('#view-whales').hidden = state.view !== 'whales';
+  VIEWS.forEach((v) => { $(`#view-${v}`).hidden = state.view !== v; });
   if (state.view === 'trades') state.dirty = true;
   if (state.view === 'positions') renderPositions();
+  if (state.view === 'mine') renderMine();
 }));
 
-$('#t-chips').addEventListener('click', (e) => {
+const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
   const b = e.target.closest('.chip'); if (!b) return;
-  $('#t-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
+  $(id).querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
   b.classList.add('active');
-  state.who = b.dataset.who;
-  state.dirty = true;
+  apply(b);
 });
-
-$('#p-chips').addEventListener('click', (e) => {
-  const b = e.target.closest('.chip'); if (!b) return;
-  $('#p-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
-  b.classList.add('active');
-  state.posFilter = b.dataset.p;
-  renderPositions();
-});
-
-$('#w-chips').addEventListener('click', (e) => {
-  const b = e.target.closest('.chip'); if (!b) return;
-  $('#w-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
-  b.classList.add('active');
-  state.verdict = b.dataset.v;
-  renderBoard();
-});
-
-$('#w-cat-chips').addEventListener('click', (e) => {
-  const b = e.target.closest('.chip'); if (!b) return;
-  $('#w-cat-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
-  b.classList.add('active');
-  state.category = b.dataset.cat;
-  renderBoard();
-});
+chipBar('#t-chips', (b) => { state.who = b.dataset.who; state.dirty = true; });
+chipBar('#p-chips', (b) => { state.posFilter = b.dataset.p; renderPositions(); });
+chipBar('#w-chips', (b) => { state.verdict = b.dataset.v; renderBoard(); });
+chipBar('#w-cat-chips', (b) => { state.category = b.dataset.cat; renderBoard(); });
 
 $('#w-sort').addEventListener('change', renderBoard);
 $('#t-min').addEventListener('input', () => { state.dirty = true; });
@@ -843,7 +995,18 @@ $('#pause').addEventListener('click', () => {
   $('#pause').classList.toggle('on', state.paused);
 });
 
-$('#pos-method-link')?.addEventListener('click', (e) => {
+$('#mine-clear').addEventListener('click', () => {
+  if (!state.copies.length) return;
+  if (confirm(`Remove all ${state.copies.length} tracked copies? This cannot be undone.`)) {
+    state.copies = [];
+    saveCopies();
+    renderMine();
+  }
+});
+$('#mine-notify').addEventListener('change', (e) => {
+  if (e.target.checked && Notification?.permission === 'default') Notification.requestPermission();
+});
+$('#mine-method-link').addEventListener('click', (e) => {
   e.preventDefault();
   $('#method-details').open = true;
   $('#method-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -855,8 +1018,7 @@ $('#src-btn').addEventListener('click', () => {
   if (!p.hidden) $('#relay').value = relayUrl();
 });
 $('#relay-save').addEventListener('click', () => {
-  const v = $('#relay').value.trim().replace(/\/+$/, '');
-  lsSet('relay', v);
+  lsSet('relay', $('#relay').value.trim().replace(/\/+$/, ''));
   location.reload();
 });
 $('#relay-clear').addEventListener('click', () => {
@@ -874,21 +1036,18 @@ document.addEventListener('keydown', (e) => {
 
 /* ───────────────────────────── loops ────────────────────────────────── */
 
-// Repaint on a timer rather than per message: at ~28 fills/sec a per-message
-// render would thrash the DOM, and at 700ms it still read as "too fast" --
-// 2.2s gives a calmer, readable cadence without feeling stale.
 setInterval(() => {
   if (state.dirty && state.view === 'trades') { state.dirty = false; renderTrades(); }
 }, RENDER_MS);
 
-// Keep relative timestamps and the rate honest even when nothing arrives.
 setInterval(() => {
-  const cut = Date.now() - 10_000;
-  state.stamps = state.stamps.filter((t) => t > cut);
+  state.stamps = state.stamps.filter((t) => t > Date.now() - 10_000);
   refreshSourceLabel();
   if (state.view === 'trades') state.dirty = true;
 }, 1000);
 
 setInterval(() => { loadSnapshot(); loadPositions(); }, REFRESH_POLL_MS);
 
+loadCopies();
+updateMineBadge();
 loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);

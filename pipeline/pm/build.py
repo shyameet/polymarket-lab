@@ -37,6 +37,11 @@ SINKS = {
 }
 
 
+# Verified real on 2026-09-17: each returns a distinct wallet set, and an
+# unknown value returns empty rather than falling back to overall.
+CATEGORIES = ("sports", "crypto", "politics", "esports", "combos")
+
+
 def _norm(addr: str | None) -> str | None:
     return addr.lower() if isinstance(addr, str) and addr.startswith("0x") else None
 
@@ -78,6 +83,32 @@ def gather_candidates(top: int, discover: bool, log) -> dict[str, dict]:
                     e[f"lb_{period}_pnl"] = r.get("pnl")
                     e[f"lb_{period}_rank"] = r.get("rank")
             log(f"  leaderboard {period:<5} {sort_by:<6} -> {len(rows):>4} rows "
+                f"(pool now {len(pool)})")
+
+    # CATEGORY-SCOPED BOARDS. Verified 2026-09-17: category=sports|crypto|
+    # politics|esports|combos each return a DIFFERENT wallet set, and an
+    # unknown category returns empty rather than silently falling back to
+    # overall -- so this param is genuinely honoured and safe to trust.
+    # Two wins at once: many wallets the overall board never surfaces, and an
+    # AUTHORITATIVE category label straight from Polymarket, rather than one
+    # inferred from market titles with a regex.
+    for cat in CATEGORIES:
+        for period in ("week", "month"):
+            try:
+                rows = api.leaderboard(time_period=period, sort_by="PNL",
+                                       limit=top, category=cat)
+            except api.PolymarketError as e:
+                log(f"  ! leaderboard {cat}/{period} failed: {e}")
+                continue
+            for r in rows:
+                w = _norm(r.get("user_id") or r.get("proxy_wallet"))
+                if not w or w in SINKS:
+                    continue
+                e = pool.setdefault(w, {"wallet": w, "sources": [], "name": None})
+                e["sources"].append(f"lb:{cat}:{period}")
+                e["name"] = e["name"] or r.get("user_name") or None
+                e.setdefault("lb_categories", set()).add(cat)
+            log(f"  leaderboard {cat:<9} {period:<6} -> {len(rows):>4} rows "
                 f"(pool now {len(pool)})")
 
     if discover:
@@ -134,6 +165,11 @@ def score_one(entry: dict, now_ts: int) -> dict | None:
         for period in ("day", "week", "month", "all"):
             card[f"lb_{period}_pnl"] = entry.get(f"lb_{period}_pnl")
             card[f"lb_{period}_rank"] = entry.get(f"lb_{period}_rank")
+        # Polymarket's OWN category labels, from the category-scoped boards this
+        # wallet appeared on. Authoritative, unlike the regex inference in
+        # feed.py, so the UI prefers these when present.
+        cats = entry.get("lb_categories")
+        card["lb_categories"] = sorted(cats) if cats else []
         return card
     except Exception as e:  # noqa: BLE001 - one bad wallet must not kill the build
         print(f"  ! score {w}: {e}", file=sys.stderr)
