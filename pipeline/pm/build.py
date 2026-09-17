@@ -22,6 +22,7 @@ from typing import Any
 
 from . import api
 from .feed import build_feed
+from .positions import build_positions
 from .score import score_wallet
 
 # Addresses that are protocol infrastructure, not traders. They surface in
@@ -51,7 +52,13 @@ def gather_candidates(top: int, discover: bool, log) -> dict[str, dict]:
     """
     pool: dict[str, dict] = {}
 
-    for period in ("all", "month", "week"):
+    # "day" added alongside all/month/week: its PNL-sorted rank+pnl are captured
+    # onto the pool entry (below) so the frontend can offer "best today" /
+    # "best this week" as sort keys on the SAME fully-screened board, rather
+    # than a separate, less rigorous list. Every wallet gathered here still
+    # goes through the full score_wallet() gate -- concentration, curve
+    # quality, program-income share -- regardless of which window found it.
+    for period in ("day", "week", "month", "all"):
         for sort_by in ("PNL", "VOLUME"):
             try:
                 rows = api.leaderboard(time_period=period, sort_by=sort_by, limit=top)
@@ -65,6 +72,11 @@ def gather_candidates(top: int, discover: bool, log) -> dict[str, dict]:
                 e = pool.setdefault(w, {"wallet": w, "sources": [], "name": None})
                 e["sources"].append(f"lb:{period}:{sort_by.lower()}")
                 e["name"] = e["name"] or r.get("user_name") or None
+                if sort_by == "PNL":
+                    # keep the PNL-window figures; VOLUME-sort rank is a
+                    # different ranking and would misrepresent "best today"
+                    e[f"lb_{period}_pnl"] = r.get("pnl")
+                    e[f"lb_{period}_rank"] = r.get("rank")
             log(f"  leaderboard {period:<5} {sort_by:<6} -> {len(rows):>4} rows "
                 f"(pool now {len(pool)})")
 
@@ -115,6 +127,13 @@ def score_one(entry: dict, now_ts: int) -> dict | None:
         card["sources"] = sorted(set(entry.get("sources") or []))
         card["discovered"] = any(s.startswith("discovery")
                                  for s in card["sources"])
+        # Carry the leaderboard's own short-window PnL through onto the card.
+        # These are RAW, self-reported figures from Polymarket's board, not
+        # something this pipeline computed -- present them as "today's/this
+        # week's leaderboard shows X", not as a re-verified number.
+        for period in ("day", "week", "month", "all"):
+            card[f"lb_{period}_pnl"] = entry.get(f"lb_{period}_pnl")
+            card[f"lb_{period}_rank"] = entry.get(f"lb_{period}_rank")
         return card
     except Exception as e:  # noqa: BLE001 - one bad wallet must not kill the build
         print(f"  ! score {w}: {e}", file=sys.stderr)
@@ -132,6 +151,8 @@ def main() -> int:
                     help="cap wallets scored (for quick local runs)")
     ap.add_argument("--no-feed", action="store_true",
                     help="skip the screened-whale trade feed")
+    ap.add_argument("--no-positions", action="store_true",
+                    help="skip the open/recently-closed position tracker")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -191,16 +212,37 @@ def main() -> int:
         ],
     }
 
-    _write(os.path.join(args.out, "whales.json"), ordered)
-
-    # The trade feed has to be built HERE, on the runner, rather than in the
-    # visitor's browser -- see feed.py for why (sinkholed DNS on some networks).
+    # Feed and category tagging run BEFORE whales.json is written, because the
+    # feed fetch is where per-wallet category (crypto/sports/politics/macro) is
+    # derived -- pulling trades a second time just to classify would double the
+    # API calls for nothing.
     if not args.no_feed:
-        feed = build_feed(ordered, workers=args.workers, log=log)
+        feed, profiles = build_feed(ordered, workers=args.workers, log=log)
         feed["generated_at"] = now_ts
         meta["feed_trades"] = len(feed["trades"])
         meta["feed_newest_ts"] = feed["newest_ts"]
         _write(os.path.join(args.out, "whale_trades.json"), feed)
+
+        cat_counts: dict[str, int] = {}
+        for c in ordered:
+            prof = profiles.get((c.get("wallet") or "").lower())
+            if prof:
+                c["category"] = prof["category"]
+                c["category_confidence"] = prof["category_confidence"]
+                c["category_breakdown"] = prof["category_breakdown"]
+                cat_counts[prof["category"]] = cat_counts.get(prof["category"], 0) + 1
+        meta["categories"] = cat_counts
+
+    _write(os.path.join(args.out, "whales.json"), ordered)
+
+    # Position lifecycle: what tracked whales are holding right now, and what
+    # they exited in the last 7 days. See positions.py for why OPEN/CLOSED is
+    # read from Polymarket's own ledger rather than re-derived from fills.
+    if not args.no_positions:
+        positions = build_positions(ordered, workers=args.workers, now_ts=now_ts, log=log)
+        meta["positions_open"] = len(positions["open"])
+        meta["positions_recently_closed"] = len(positions["recently_closed"])
+        _write(os.path.join(args.out, "whale_positions.json"), positions)
 
     _write(os.path.join(args.out, "meta.json"), meta)
 

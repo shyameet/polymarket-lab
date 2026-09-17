@@ -6,19 +6,33 @@
  *             any network, including ones that cannot resolve polymarket.com.
  *   direct    the browser's own websocket to Polymarket. Sub-second, but dies
  *             wherever the polymarket.com DNS zone is sinkholed.
- *   snapshot  data/whale_trades.json, committed by the scheduled job. Always
- *             available, never live -- GitHub throttles cron on free public
- *             repos and the observed gap between runs reached 245 minutes.
+ *   snapshot  data/*.json, committed by the scheduled job. Always available,
+ *             never live -- GitHub throttles cron on free public repos and the
+ *             observed gap between runs reached 245 minutes.
  *
  * Whichever is in use is stated in the header, with its real age. Nothing here
  * is a hardcoded statistic: every number is computed from whatever data is
  * actually loaded, so the page cannot drift away from reality.
+ *
+ * THREE VIEWS
+ * -----------
+ *   Trades     the live/near-live fill tape, decluttered to what you need to
+ *              act on a fill: who, what, price, and what mirroring it at your
+ *              own stake would look like.
+ *   Positions  what screened whales are CURRENTLY HOLDING and what they
+ *              RECENTLY EXITED, read from Polymarket's own position ledger.
+ *              This is the honest answer to "when do I get out" -- it shows
+ *              you what happened, it does not claim that mirroring it is
+ *              proven profitable (see the Method section).
+ *   Whales     the scored board: who passed the screen, sortable by all-time
+ *              risk-adjusted return or by the official day/week leaderboard,
+ *              filterable by category.
  */
 
 const DIRECT_WS = 'wss://ws-live-data.polymarket.com';
-const SNAPSHOT_POLL_MS = 20_000;
-const RENDER_MS = 700;        // the feed runs ~28/sec; repaint on a timer
-const MAX_ROWS = 250;
+const REFRESH_POLL_MS = 20_000;   // how often the snapshot/positions files are re-pulled
+const RENDER_MS = 2200;           // deliberately slow -- see the user's "goes too fast" note
+const MAX_ROWS = 150;
 const DIRECT_MAX_FAILS = 3;
 
 const $ = (s) => document.querySelector(s);
@@ -28,14 +42,18 @@ const el = (t, c, txt) => {
   if (txt != null) n.textContent = txt;
   return n;
 };
+const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 const state = {
   whales: [], byWallet: new Map(),
   trades: [], seenKeys: new Set(),
+  positions: { open: [], recently_closed: [] }, posMeta: null,
   snapshotMeta: null, meta: null,
   source: 'starting', via: 'direct', paused: false, dirty: true,
   stamps: [], directFails: 0, ws: null, backoff: 1000, pinger: null,
-  view: 'trades', who: 'best', verdict: '', hintShown: false,
+  view: 'trades', who: 'best', verdict: 'good', category: '', posFilter: 'all',
+  hintShown: false,
 };
 
 /* ─────────────────────────── format helpers ─────────────────────────── */
@@ -53,6 +71,7 @@ const pct = (v, d = 0) => (v == null ? '—' : `${(v * 100).toFixed(d)}%`);
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
 const sign = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'mut');
 const ago = (ts) => {
+  if (!ts) return '—';
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
   if (s < 60) return `${s}s`;
   if (s < 5400) return `${Math.round(s / 60)}m`;
@@ -61,25 +80,27 @@ const ago = (ts) => {
 };
 const isChurn = (t) =>
   /Up or Down|updown-\d+m/i.test(`${t.title || ''} ${t.slug || ''}`);
+// Polymarket combo/parlay bets AND several independent markets into one
+// wager -- e.g. "Team A win AND Team B win AND Team C draw". Those have no
+// single outcome (the field comes back empty) and cannot be mirrored as a
+// simple single-market trade, so they need their own handling, not a "?"
+// placeholder and a misleading share count.
+const isCombo = (t) => !t.outcome && / AND /.test(t.title || '');
+const CAT_LABEL = { crypto: 'Crypto', sports: 'Sports', politics: 'Politics',
+                   macro: 'Macro', other: 'Other' };
 
-// Category is derived from the market text, so it stays correct as markets change.
-function category(t) {
-  const s = `${t.title || ''} ${t.slug || ''}`.toLowerCase();
-  if (/up or down|bitcoin|ethereum|solana|\bbtc\b|\beth\b|crypto/.test(s)) return 'crypto';
-  if (/\bvs\.?\b|win on 20|o\/u|nba|nfl|mlb|ufc|atp|wta|premier league|match|\bfc\b/.test(s))
-    return 'sports';
-  if (/fed|interest rate|cpi|inflation|gdp|recession|jobs/.test(s)) return 'macro';
-  if (/trump|election|president|senate|congress|poll|nominee|war|ceasefire/.test(s))
-    return 'politics';
-  return 'other';
-}
+const marketLink = (title, slug) => {
+  const a = el('a', null, title || slug || '—');
+  if (slug) { a.href = `https://polymarket.com/event/${slug}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+  return a;
+};
 
 /* ─────────────────────────── relay config ───────────────────────────── */
 
 const relayUrl = () => {
   const q = new URLSearchParams(location.search).get('relay');
-  if (q) { try { localStorage.setItem('relay', q); } catch {} return q.replace(/\/+$/, ''); }
-  try { return (localStorage.getItem('relay') || '').replace(/\/+$/, ''); } catch { return ''; }
+  if (q) { lsSet('relay', q); return q.replace(/\/+$/, ''); }
+  return (lsGet('relay', '') || '').replace(/\/+$/, '');
 };
 
 /* ────────────────────────── source indicator ────────────────────────── */
@@ -254,6 +275,17 @@ async function loadSnapshot() {
   } catch { /* mid-deploy; the next tick retries */ }
 }
 
+async function loadPositions() {
+  try {
+    const p = await fetch('data/whale_positions.json', { cache: 'no-cache' })
+      .then((r) => r.json());
+    if (!p) return;
+    state.positions = { open: p.open || [], recently_closed: p.recently_closed || [] };
+    state.posMeta = p;
+    if (state.view === 'positions') renderPositions();
+  } catch { /* mid-deploy; the next tick retries */ }
+}
+
 /* ──────────────────────────── trades view ───────────────────────────── */
 
 function visibleTrades() {
@@ -274,8 +306,7 @@ function renderTrades() {
   const rows = visibleTrades();
   const list = $('#tape');
   const empty = $('#tape-empty');
-
-  renderTradeStats(rows);
+  const stake = Number($('#t-stake').value) || 25;
 
   if (!rows.length) {
     list.textContent = '';
@@ -305,11 +336,13 @@ function renderTrades() {
     if (t.discovered) who.appendChild(el('span', 'tag', 'OFF-BOARD'));
     li.appendChild(who);
 
+    const combo = isCombo(t);
     const mid = el('div');
     mid.style.cssText = 'font-size:13px;color:var(--dim)';
     mid.appendChild(el('span', `side ${t.side}`, t.side));
     mid.appendChild(document.createTextNode(
-      ` ${t.outcome || ''} @ ${t.price.toFixed(3)}`));
+      combo ? ' combo bet' : ` ${t.outcome || ''} @ ${t.price.toFixed(3)}`));
+    if (combo) mid.appendChild(el('span', 'tag', 'MULTI-LEG'));
     li.appendChild(mid);
 
     const right = el('div');
@@ -319,13 +352,30 @@ function renderTrades() {
     li.appendChild(right);
 
     const mk = el('div', 'mkt');
-    if (t.slug) {
-      const a = el('a', null, t.title || t.slug);
-      a.href = `https://polymarket.com/event/${t.slug}`;
-      a.target = '_blank'; a.rel = 'noopener noreferrer';
-      mk.appendChild(a);
-    } else mk.textContent = t.title || '—';
+    mk.appendChild(marketLink(t.title, t.slug));
     li.appendChild(mk);
+
+    // The one thing that answers "how much should I have bet": a flat mirror
+    // stake (not scaled to the whale's size -- their $50k bet is not a signal
+    // that YOU should bet $50k) sized against the price on this print. This is
+    // the price they got, not the price a delayed follower would actually get
+    // -- said plainly, not left implied.
+    //
+    // Combo bets get their own message rather than a share count: Polymarket
+    // lets you AND several independent markets into one wager, there is no
+    // single "outcome" to buy shares of, and a real follower cannot cheaply
+    // reconstruct someone else's specific N-leg parlay.
+    if (combo) {
+      const mirror = el('div', 'mirror',
+        'combo bet across multiple markets — not something a single mirror trade can reproduce');
+      li.appendChild(mirror);
+    } else if (t.price > 0 && t.price < 1) {
+      const shares = stake / t.price;
+      const mirror = el('div', 'mirror');
+      mirror.innerHTML = `mirror @ $${stake}: <b>~${shares.toFixed(shares < 10 ? 1 : 0)} sh</b> `
+        + `of "${t.outcome}" — at THEIR price; arriving late you would likely pay more`;
+      li.appendChild(mirror);
+    }
 
     frag.appendChild(li);
   }
@@ -333,61 +383,143 @@ function renderTrades() {
   list.appendChild(frag);
 }
 
-// Every figure here is measured from the rows on screen, never written in.
-function renderTradeStats(rows) {
-  const box = $('#t-stats');
-  box.textContent = '';
-  if (!rows.length) return;
+/* ─────────────────────────── positions view ──────────────────────────── */
 
-  const usd = rows.map((r) => r.usd).sort((a, b) => a - b);
-  const median = usd[Math.floor(usd.length / 2)];
-  const total = usd.reduce((a, b) => a + b, 0);
+function visiblePositions() {
+  const { open, recently_closed } = state.positions;
+  if (state.posFilter === 'open') return { open, closed: [] };
+  if (state.posFilter === 'closed') return { open: [], closed: recently_closed };
+  return { open, closed: recently_closed };
+}
 
-  const cats = {};
-  for (const r of rows) {
-    const c = category(r);
-    cats[c] = (cats[c] || 0) + r.usd;
+function renderPositions() {
+  const { open, closed } = visiblePositions();
+  const list = $('#positions');
+  const empty = $('#positions-empty');
+  list.textContent = '';
+
+  renderPositionStats();
+
+  const rows = [...open.map((p) => ({ ...p, _open: true })),
+                ...closed.map((p) => ({ ...p, _open: false }))];
+  if (!rows.length) {
+    empty.hidden = false;
+    empty.textContent = state.posMeta ? 'Nothing to show for this filter.' : 'Loading…';
+    return;
   }
-  const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+  empty.hidden = true;
 
+  const frag = document.createDocumentFragment();
+  for (const p of rows) {
+    const li = el('li', 'row poscard');
+
+    const who = el('div', 'who');
+    const nm = el('span', 'nm', p.name || short(p.wallet));
+    const card = state.byWallet.get((p.wallet || '').toLowerCase());
+    if (card) nm.addEventListener('click', () => openDrawer(card));
+    who.appendChild(nm);
+    if (p.verdict) {
+      who.appendChild(el('span',
+        `v v-${p.verdict === 'NOT COPYABLE' ? 'NOT' : p.verdict}`, p.verdict));
+    }
+    li.appendChild(who);
+
+    li.appendChild(el('span', `pstatus ${p._open ? 'open' : 'exited'}`,
+      p._open ? 'STILL IN' : 'EXITED'));
+
+    const mk = el('div', 'mkt');
+    mk.appendChild(marketLink(p.title, p.slug));
+    if (p.outcome) mk.appendChild(document.createTextNode(`  ·  ${p.outcome}`));
+    li.appendChild(mk);
+
+    const meta = el('div', 'pmeta');
+    const bit = (label, val) => {
+      const s = el('span', null, `${label} `);
+      s.appendChild(el('b', null, val));
+      meta.appendChild(s);
+    };
+    bit('entry', p.avg_price != null ? `$${Number(p.avg_price).toFixed(3)}` : '—');
+    if (p._open) {
+      bit('now', p.current_price != null ? `$${Number(p.current_price).toFixed(3)}` : '—');
+      bit('unrealized', money(p.unrealized_pnl));
+      bit('since', `${ago(p.last_event_at)} ago`);
+    } else {
+      bit('realized', money(p.realized_pnl));
+      bit('exited', `${ago(p.last_event_at)} ago`);
+    }
+    if (p.likely_hedge_residue) {
+      meta.appendChild(el('span', 'hedge-flag',
+        'possible hedge residue, not a chosen price'));
+    }
+    li.appendChild(meta);
+
+    frag.appendChild(li);
+  }
+  list.appendChild(frag);
+}
+
+function renderPositionStats() {
+  const box = $('#p-stats');
+  box.textContent = '';
   const add = (k, v) => {
     const d = el('div', 'stat');
     d.appendChild(el('div', 'k', k));
     d.appendChild(el('div', 'v', v));
     box.appendChild(d);
   };
-  add('fills shown', String(rows.length));
-  add('notional', money(total));
-  add('median fill', money(median, true));
-  add('whales active', String(new Set(rows.map((r) => r.wallet)).size));
-  if (top && total > 0) add(`mostly ${top[0]}`, pct(top[1] / total));
+  add('currently holding', String(state.positions.open.length));
+  add('exited (7d)', String(state.positions.recently_closed.length));
+  if (state.posMeta?.generated_at) add('refreshed', `${ago(state.posMeta.generated_at)} ago`);
 }
 
 /* ──────────────────────────── whales view ───────────────────────────── */
 
 const ORDER = { CANDIDATE: 0, WATCH: 1, FRAGILE: 2, 'NOT COPYABLE': 3, INSUFFICIENT: 4 };
+const isGood = (c) => c.verdict === 'CANDIDATE' || c.verdict === 'WATCH';
 
 function renderBoard() {
   const sortKey = $('#w-sort').value;
-  const rows = state.whales.filter((c) => !state.verdict || c.verdict === state.verdict);
-
-  rows.sort((a, b) => {
-    if (a.rankable !== b.rankable) return a.rankable ? -1 : 1;
-    if (sortKey === 'screen') {
-      const d = (ORDER[a.verdict] ?? 9) - (ORDER[b.verdict] ?? 9);
-      if (d) return d;
-      return (b.net_dd ?? -Infinity) - (a.net_dd ?? -Infinity);
-    }
-    const av = a[sortKey], bv = b[sortKey];
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return sortKey === 'max_dd_usd' ? av - bv : bv - av;
+  let rows = state.whales.filter((c) => {
+    if (state.verdict === 'good' && !isGood(c)) return false;
+    if (state.verdict && state.verdict !== 'good' && c.verdict !== state.verdict) return false;
+    if (state.category && c.category !== state.category) return false;
+    return true;
   });
+
+  const hint = $('#w-sort-hint');
+  if (sortKey === 'lb_day_pnl' || sortKey === 'lb_week_pnl') {
+    const have = rows.filter((c) => c[sortKey] != null).length;
+    hint.hidden = false;
+    hint.textContent = `${have} of ${rows.length} shown wallets appeared on that leaderboard `
+      + `window; the rest sort to the bottom. This is Polymarket's own raw number, `
+      + `not re-verified by the screen.`;
+    rows.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return bv - av;
+    });
+  } else {
+    hint.hidden = true;
+    rows.sort((a, b) => {
+      if (a.rankable !== b.rankable) return a.rankable ? -1 : 1;
+      if (sortKey === 'screen') {
+        const d = (ORDER[a.verdict] ?? 9) - (ORDER[b.verdict] ?? 9);
+        if (d) return d;
+        return (b.net_dd ?? -Infinity) - (a.net_dd ?? -Infinity);
+      }
+      const av = a[sortKey], bv = b[sortKey];
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return sortKey === 'max_dd_usd' ? av - bv : bv - av;
+    });
+  }
 
   const list = $('#board');
   list.textContent = '';
   $('#board-empty').hidden = rows.length > 0;
-  renderBoardStats();
+  renderBoardStats(rows);
 
   const frag = document.createDocumentFragment();
   rows.slice(0, 200).forEach((c, i) => {
@@ -398,10 +530,13 @@ function renderBoard() {
     const nm = el('span', 'nm', c.name || short(c.wallet));
     nm.addEventListener('click', () => openDrawer(c));
     who.appendChild(nm);
+    if (c.category) who.appendChild(el('span', 'tag', CAT_LABEL[c.category] || c.category));
     if (c.discovered) who.appendChild(el('span', 'tag', 'OFF-BOARD'));
     li.appendChild(who);
 
-    li.appendChild(el('div', `amt ${sign(c.position_pnl)}`, money(c.position_pnl)));
+    const amtVal = (sortKey === 'lb_day_pnl' || sortKey === 'lb_week_pnl')
+      && c[sortKey] != null ? c[sortKey] : c.position_pnl;
+    li.appendChild(el('div', `amt ${sign(amtVal)}`, money(amtVal)));
     li.appendChild(el('span',
       `v v-${c.verdict === 'NOT COPYABLE' ? 'NOT' : c.verdict}`, c.verdict));
 
@@ -415,6 +550,8 @@ function renderBoard() {
     bit('net/DD', c.net_dd == null ? '—' : c.net_dd.toFixed(1));
     bit('months +', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
     bit('fills', (c.trade_count || 0).toLocaleString());
+    if (c.lb_day_pnl != null) bit('today', money(c.lb_day_pnl));
+    if (c.lb_week_pnl != null) bit('this wk', money(c.lb_week_pnl));
     li.appendChild(m);
 
     if (c.flags?.length) {
@@ -426,7 +563,7 @@ function renderBoard() {
   list.appendChild(frag);
 }
 
-function renderBoardStats() {
+function renderBoardStats(rows) {
   const box = $('#w-stats');
   box.textContent = '';
   if (!state.whales.length) return;
@@ -439,8 +576,8 @@ function renderBoardStats() {
     box.appendChild(d);
   };
   add('scored', String(state.whales.length));
-  add('passed screen', String((v.CANDIDATE || 0) + (v.WATCH || 0)));
-  add('rejected', String(v['NOT COPYABLE'] || 0));
+  add('worth watching', String((v.CANDIDATE || 0) + (v.WATCH || 0)));
+  add('shown now', String(rows.length));
   add('off-leaderboard', String(state.whales.filter((c) => c.discovered).length));
   if (state.meta?.generated_at) add('refreshed', `${ago(state.meta.generated_at)} ago`);
 }
@@ -454,6 +591,11 @@ function openDrawer(c) {
   b.appendChild(el('p', 'dsub', c.wallet));
   b.appendChild(el('span',
     `v v-${c.verdict === 'NOT COPYABLE' ? 'NOT' : c.verdict}`, c.verdict));
+  if (c.category) {
+    const t = el('span', 'tag', `mostly ${CAT_LABEL[c.category] || c.category}`);
+    t.style.marginLeft = '8px';
+    b.appendChild(t);
+  }
 
   const grid = el('div', 'grid');
   const cell = (k, v, cls) => {
@@ -475,10 +617,34 @@ function openDrawer(c) {
   cell('Fees paid', money(c.fees_paid), 'neg');
   cell('Fills', (c.trade_count || 0).toLocaleString());
   cell('Months positive', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
+  if (c.lb_day_pnl != null) cell('Today (leaderboard)', money(c.lb_day_pnl), sign(c.lb_day_pnl));
+  if (c.lb_week_pnl != null) cell('This week (leaderboard)', money(c.lb_week_pnl), sign(c.lb_week_pnl));
   cell('Curve days', String(c.curve_days ?? '—'));
-  cell('Curve moves', String(c.curve_moves ?? '—'));
   cell('Idle days', c.days_idle == null ? '—' : String(c.days_idle));
   b.appendChild(grid);
+
+  const openPos = state.positions.open.filter(
+    (p) => (p.wallet || '').toLowerCase() === (c.wallet || '').toLowerCase());
+  const closedPos = state.positions.recently_closed.filter(
+    (p) => (p.wallet || '').toLowerCase() === (c.wallet || '').toLowerCase());
+  if (openPos.length || closedPos.length) {
+    b.appendChild(el('div', 'sec', 'Positions right now'));
+    for (const p of openPos.slice(0, 5)) {
+      const row = el('div');
+      row.style.cssText = 'font-size:12.5px;color:var(--dim);margin-bottom:4px';
+      row.innerHTML = `<span class="pstatus open">STILL IN</span> `
+        + `${p.title || ''} — entry $${(p.avg_price ?? 0).toFixed(3)}, `
+        + `unrealized ${money(p.unrealized_pnl)}`;
+      b.appendChild(row);
+    }
+    for (const p of closedPos.slice(0, 5)) {
+      const row = el('div');
+      row.style.cssText = 'font-size:12.5px;color:var(--dim);margin-bottom:4px';
+      row.innerHTML = `<span class="pstatus exited">EXITED</span> `
+        + `${p.title || ''} — realized ${money(p.realized_pnl)}, ${ago(p.last_event_at)} ago`;
+      b.appendChild(row);
+    }
+  }
 
   if (c.flags?.length) {
     b.appendChild(el('div', 'sec', 'Why it scored this way'));
@@ -581,6 +747,23 @@ function renderMethod() {
     });
   m.appendChild(ul);
 
+  h('Positions and exits');
+  p(`The <b>Positions</b> tab shows what each screened whale is currently holding
+     and what they exited in roughly the last week, read from Polymarket's own
+     ledger. The default rule offered there is <b>exit when they exit</b> —
+     that is real, checkable data. It is <b>not yet proven to be the right
+     rule</b>: a first pass at simulating naive entry/exit mirroring on this
+     project's own fill tape was dominated by fee drag and by longshot
+     positions that were simply held to resolution rather than by genuine
+     timing skill. Treat the Positions tab as visibility, not a signal.`);
+
+  h('Today / this week / by category');
+  p(`The Whales board can sort by Polymarket's own day and week leaderboard
+     PnL, and filter by the category a wallet mostly trades (crypto, sports,
+     politics, macro) inferred from their recent fills. These are useful for
+     finding who is active RIGHT NOW, but they are a shorter, noisier sample
+     than the all-time screen — a wallet can have a great day by luck alone.`);
+
   h('Two traps it is hardened against');
   p(`<b>The equity curve does not start at zero.</b> One wallet's series opens
      already six figures down, so seeding the high-water mark at the first
@@ -605,8 +788,10 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
   b.classList.add('active');
   state.view = b.dataset.view;
   $('#view-trades').hidden = state.view !== 'trades';
+  $('#view-positions').hidden = state.view !== 'positions';
   $('#view-whales').hidden = state.view !== 'whales';
   if (state.view === 'trades') state.dirty = true;
+  if (state.view === 'positions') renderPositions();
 }));
 
 $('#t-chips').addEventListener('click', (e) => {
@@ -617,6 +802,14 @@ $('#t-chips').addEventListener('click', (e) => {
   state.dirty = true;
 });
 
+$('#p-chips').addEventListener('click', (e) => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  $('#p-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
+  b.classList.add('active');
+  state.posFilter = b.dataset.p;
+  renderPositions();
+});
+
 $('#w-chips').addEventListener('click', (e) => {
   const b = e.target.closest('.chip'); if (!b) return;
   $('#w-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
@@ -625,13 +818,35 @@ $('#w-chips').addEventListener('click', (e) => {
   renderBoard();
 });
 
+$('#w-cat-chips').addEventListener('click', (e) => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  $('#w-cat-chips').querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
+  b.classList.add('active');
+  state.category = b.dataset.cat;
+  renderBoard();
+});
+
 $('#w-sort').addEventListener('change', renderBoard);
 $('#t-min').addEventListener('input', () => { state.dirty = true; });
+$('#t-stake').addEventListener('input', () => {
+  lsSet('mirrorStake', $('#t-stake').value);
+  state.dirty = true;
+});
+{
+  const saved = lsGet('mirrorStake', null);
+  if (saved) $('#t-stake').value = saved;
+}
 
 $('#pause').addEventListener('click', () => {
   state.paused = !state.paused;
   $('#pause').textContent = state.paused ? 'Resume' : 'Pause';
   $('#pause').classList.toggle('on', state.paused);
+});
+
+$('#pos-method-link')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  $('#method-details').open = true;
+  $('#method-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 $('#src-btn').addEventListener('click', () => {
@@ -641,7 +856,7 @@ $('#src-btn').addEventListener('click', () => {
 });
 $('#relay-save').addEventListener('click', () => {
   const v = $('#relay').value.trim().replace(/\/+$/, '');
-  try { localStorage.setItem('relay', v); } catch {}
+  lsSet('relay', v);
   location.reload();
 });
 $('#relay-clear').addEventListener('click', () => {
@@ -660,7 +875,8 @@ document.addEventListener('keydown', (e) => {
 /* ───────────────────────────── loops ────────────────────────────────── */
 
 // Repaint on a timer rather than per message: at ~28 fills/sec a per-message
-// render would thrash the DOM for no visible benefit.
+// render would thrash the DOM, and at 700ms it still read as "too fast" --
+// 2.2s gives a calmer, readable cadence without feeling stale.
 setInterval(() => {
   if (state.dirty && state.view === 'trades') { state.dirty = false; renderTrades(); }
 }, RENDER_MS);
@@ -673,6 +889,6 @@ setInterval(() => {
   if (state.view === 'trades') state.dirty = true;
 }, 1000);
 
-setInterval(loadSnapshot, SNAPSHOT_POLL_MS);
+setInterval(() => { loadSnapshot(); loadPositions(); }, REFRESH_POLL_MS);
 
-loadWhales().then(loadSnapshot).then(connect);
+loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);

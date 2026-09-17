@@ -4,11 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
-<meta name="description" content="Live Polymarket whale trades, screened by drawdown rather than profit.">
-<!-- ?v= is load-bearing: GitHub Pages serves each asset with max-age=600 and
-     caches them INDEPENDENTLY, so fresh HTML can otherwise run stale JS.
-     Bump this token whenever app.js or style.css changes. -->
-<link rel="stylesheet" href="style.css?v=20260916d">
+<meta name="description" content="Track Polymarket whales, what they're holding, when they exit, and what a mirrored trade would cost — screened by drawdown rather than profit.">
+<link rel="stylesheet" href="style.css?v=20260917a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
 </head>
 <body>
@@ -26,7 +23,6 @@
   </div>
 </header>
 
-<!-- data-source panel, hidden until asked for -->
 <div id="src-panel" class="srcpanel" hidden>
   <p>
     This page reads Polymarket directly from your browser. If your network
@@ -47,6 +43,7 @@
 
 <nav class="seg" role="tablist">
   <button class="segbtn active" data-view="trades" role="tab">Trades</button>
+  <button class="segbtn" data-view="positions" role="tab">Positions</button>
   <button class="segbtn" data-view="whales" role="tab">Whales</button>
 </nav>
 
@@ -59,37 +56,81 @@
       <button class="chip" data-who="everyone">Everyone</button>
     </div>
     <label class="minlbl">min&nbsp;$
-      <input type="number" id="t-min" value="250" min="0" step="50">
+      <input type="number" id="t-min" value="100" min="0" step="50">
+    </label>
+    <label class="minlbl" title="Used to size the 'if you copied this' line below each trade">
+      mirror&nbsp;$
+      <input type="number" id="t-stake" value="25" min="1" step="5">
     </label>
     <button id="pause" class="btn">Pause</button>
   </div>
 
-  <div id="t-stats" class="statrow"></div>
+  <p class="hint">Updates every couple of seconds, newest first. Click a name to see the wallet's full scorecard.</p>
 
   <ul id="tape" class="tape"></ul>
   <p id="tape-empty" class="empty">Connecting…</p>
+</section>
+
+<!-- ────────────────────────────── POSITIONS ────────────────────────────── -->
+<section id="view-positions" class="view" hidden>
+  <div class="callout small">
+    <strong>This answers "when do I get out?"</strong> — but as data, not advice.
+    <b>Currently holding</b> and <b>Recently exited</b> are read straight from
+    Polymarket's own position ledger for each screened whale.
+    The default mirror rule shown here is simply <b>exit when they exit</b> —
+    that is what was asked for, and it is real and checkable. It is
+    <b>not yet proven to be the right rule</b>: see
+    <a href="#" id="pos-method-link">Method</a> for why naive copy-exit timing
+    tested badly in this project's own simulation.
+  </div>
+
+  <div class="controls">
+    <div class="chips" id="p-chips">
+      <button class="chip active" data-p="all">All</button>
+      <button class="chip" data-p="open">Currently holding</button>
+      <button class="chip" data-p="closed">Recently exited</button>
+    </div>
+  </div>
+
+  <div id="p-stats" class="statrow"></div>
+
+  <ul id="positions" class="tape"></ul>
+  <p id="positions-empty" class="empty">Loading…</p>
 </section>
 
 <!-- ─────────────────────────────── WHALES ─────────────────────────────── -->
 <section id="view-whales" class="view" hidden>
   <div class="controls">
     <div class="chips" id="w-chips">
-      <button class="chip active" data-v="">All</button>
-      <button class="chip" data-v="CANDIDATE">Candidates</button>
-      <button class="chip" data-v="WATCH">Watch</button>
+      <button class="chip active" data-v="good">Worth watching</button>
+      <button class="chip" data-v="CANDIDATE">Candidates only</button>
+      <button class="chip" data-v="FRAGILE">Fragile</button>
       <button class="chip" data-v="NOT COPYABLE">Rejected</button>
+      <button class="chip" data-v="">All scored</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="chips" id="w-cat-chips">
+      <button class="chip active" data-cat="">Any category</button>
+      <button class="chip" data-cat="crypto">Crypto</button>
+      <button class="chip" data-cat="sports">Sports</button>
+      <button class="chip" data-cat="politics">Politics</button>
+      <button class="chip" data-cat="macro">Macro</button>
     </div>
     <label class="minlbl">sort
       <select id="w-sort">
         <option value="screen">Screen rank</option>
+        <option value="lb_day_pnl">Best today</option>
+        <option value="lb_week_pnl">Best this week</option>
         <option value="net_dd">Net / drawdown</option>
-        <option value="position_pnl">Profit</option>
+        <option value="position_pnl">Total profit</option>
         <option value="max_dd_usd">Lowest drawdown</option>
       </select>
     </label>
   </div>
 
   <div id="w-stats" class="statrow"></div>
+  <p class="hint" id="w-sort-hint" hidden></p>
 
   <ul id="board" class="board"></ul>
   <p id="board-empty" class="empty" hidden>Nothing matches.</p>
@@ -104,13 +145,13 @@
 </div>
 
 <footer class="foot">
-  <details>
+  <details id="method-details">
     <summary>How this works, and why it isn't a buy signal</summary>
     <div class="prose" id="method"></div>
   </details>
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260916d" type="module"></script>
+<script src="app.js?v=20260917a" type="module"></script>
 </body>
 </html>
