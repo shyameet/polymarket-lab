@@ -48,6 +48,11 @@ _ALLOWED: dict[str, set[str]] = {
     "/v2/trades": {
         "user", "condition", "taker_only", "limit", "cursor",
         "sort_by", "sort_direction", "side",
+        # Cross-market notional filter -- verified live 2026-09-17:
+        # filter_type=CASH&filter_amount=10000 floors results at exactly $10k
+        # of notional and pages via cursor. This is the only discovery route
+        # keyed on RECENT activity rather than cumulative standing.
+        "filter_type", "filter_amount",
     },
     "/v2/activity": {"user", "limit", "cursor", "sort_by", "sort_direction", "type"},
     "/v2/holders": {"condition", "limit", "include_pnl", "min_balance", "cursor"},
@@ -276,3 +281,21 @@ def parse_json_field(value):
         except json.JSONDecodeError:
             return []
     return value or []
+
+
+def big_trades(min_usd: float = 10_000, *, cap: int = 2000) -> list[dict]:
+    """Recent trades above a notional floor, across every market.
+
+    Verified live 2026-09-17: filter_type=CASH with filter_amount floors the
+    result at exactly that notional and cursor-pages onward, reaching back
+    roughly 45 days.
+
+    This finds a DIFFERENT population from the leaderboard. A leaderboard ranks
+    on cumulative standing, so it is slow to show someone who started trading
+    size last week; this is keyed purely on recent activity. It is also the only
+    route that surfaces a wallet BEFORE it has accumulated enough lifetime PnL
+    to rank anywhere.
+    """
+    return list(_paginate("/v2/trades",
+                          {"filter_type": "CASH", "filter_amount": min_usd},
+                          cap=cap, page=500))

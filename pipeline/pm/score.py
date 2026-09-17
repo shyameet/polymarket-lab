@@ -288,7 +288,9 @@ def score_wallet(stats: dict, points: list[dict], *, now_ts: int) -> dict:
         # durability
         "months": cons["months"],
         "pct_positive_months": cons["pct_positive"],
-        "monthly": cons["monthly"],
+        # last 24 months only -- the drawer chart shows a fixed window and a
+        # full multi-year series on 1,300 cards is most of the payload
+        "monthly": cons["monthly"][-24:],
 
         # copyability
         "concentration": round(concentration, 4) if concentration is not None else None,

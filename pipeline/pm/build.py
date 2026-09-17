@@ -37,9 +37,19 @@ SINKS = {
 }
 
 
-# Verified real on 2026-09-17: each returns a distinct wallet set, and an
-# unknown value returns empty rather than falling back to overall.
-CATEGORIES = ("sports", "crypto", "politics", "esports", "combos")
+# All 12 categories the leaderboard actually accepts, enumerated live on
+# 2026-09-17 by probing candidates: a real one returns rows, an invalid one
+# returns an EMPTY array (not an error), which is how the set was established.
+# Each returns a substantially different wallet population -- measured novelty
+# against an overall baseline ran from 29% (sports) to 75% (weather) -- so this
+# is genuine discovery, not a re-ranking of the same names.
+CATEGORIES = ("sports", "crypto", "politics", "esports", "combos",
+              "economics", "tech", "culture", "mentions", "weather", "finance")
+
+# Notional floor for the recent-activity scanner. Wallets are found by having
+# placed a single trade this size, which surfaces people trading size NOW --
+# a population the cumulative leaderboard is structurally slow to show.
+BIG_TRADE_USD = 10_000
 
 
 def _norm(addr: str | None) -> str | None:
@@ -142,6 +152,25 @@ def gather_candidates(top: int, discover: bool, log) -> dict[str, dict]:
             log(f"  discovery: +{found} wallets never seen on a leaderboard")
         except api.PolymarketError as e:
             log(f"  ! discovery failed: {e}")
+
+        # RECENT-ACTIVITY SCANNER. Everything above ranks on cumulative
+        # standing, so a wallet that started trading size last week is invisible
+        # to all of it. This finds anyone who placed a single trade over
+        # BIG_TRADE_USD in roughly the last 45 days.
+        try:
+            big = api.big_trades(BIG_TRADE_USD, cap=1500)
+            found = 0
+            for t in big:
+                w = _norm(t.get("proxy_wallet"))
+                if not w or w in SINKS or w in pool:
+                    continue
+                pool[w] = {"wallet": w, "sources": ["discovery:big-trade"],
+                           "name": t.get("name")}
+                found += 1
+            log(f"  big trades (>=${BIG_TRADE_USD:,}): {len(big)} fills -> "
+                f"+{found} wallets not seen on any board")
+        except api.PolymarketError as e:
+            log(f"  ! big-trade scan failed: {e}")
 
     return pool
 

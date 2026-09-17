@@ -49,6 +49,12 @@ from .feed import FEED_VERDICTS
 
 MAX_OPEN_PER_WALLET = 12
 MAX_CLOSED_PER_WALLET = 8
+
+# Positions below this are dust and are dropped. This is a readability fix as
+# much as a payload one: a whale holding 400 sub-$50 scraps buries the three
+# positions that actually say something, and you cannot meaningfully mirror a
+# $4 position anyway.
+MIN_POSITION_USD = 50.0
 # a CLOSED position older than this is not "they just exited" any more
 RECENT_EXIT_WINDOW_S = 7 * 86400
 
@@ -113,11 +119,15 @@ def build_positions(cards: list[dict], *, workers: int = 8, now_ts: int,
             card = futs[fut]
             opened, closed = fut.result()
             for p in opened:
-                open_out.append(_normalize(p, card, "OPEN"))
+                rec = _normalize(p, card, "OPEN")
+                if max(abs(rec["value_usd"]), abs(rec["cost_usd"])) >= MIN_POSITION_USD:
+                    open_out.append(rec)
             for p in closed:
                 rec = _normalize(p, card, "CLOSED")
                 last = rec.get("last_event_at")
-                if last and (now_ts - int(last)) <= RECENT_EXIT_WINDOW_S:
+                if not last or (now_ts - int(last)) > RECENT_EXIT_WINDOW_S:
+                    continue
+                if max(abs(rec["cost_usd"]), abs(rec["realized_pnl"])) >= MIN_POSITION_USD:
                     closed_out.append(rec)
 
     open_out.sort(key=lambda r: -(r.get("last_event_at") or 0))

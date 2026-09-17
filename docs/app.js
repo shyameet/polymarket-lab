@@ -85,8 +85,12 @@ const VERDICT_WORD = {
   'NOT COPYABLE': 'AVOID',
   INSUFFICIENT: 'TOO NEW',
 };
-const CAT_LABEL = { crypto: 'Crypto', sports: 'Sports', politics: 'Politics',
-                    esports: 'Esports', combos: 'Parlays', macro: 'Macro', other: '' };
+const CAT_LABEL = {
+  crypto: 'Crypto', sports: 'Sports', politics: 'Politics', esports: 'Esports',
+  combos: 'Parlays', economics: 'Economics', tech: 'Tech', culture: 'Culture',
+  finance: 'Finance', weather: 'Weather', mentions: 'Mentions',
+  macro: 'Macro', other: '',
+};
 
 // Polymarket's own category label wins over the regex guess from market text.
 const catOf = (c) => (c.lb_categories && c.lb_categories[0]) || c.category || '';
