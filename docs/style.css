@@ -213,6 +213,7 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
 .tag{font-size:12px;border:1px solid var(--violet);color:var(--violet);
   padding:3px 9px;border-radius:7px;white-space:nowrap}
 .tag.plain{border-color:var(--line);color:var(--dim)}
+.tag.stack{border-color:var(--gold);color:var(--gold)}
 
 /* board rank */
 .rank{font-family:var(--mono);color:var(--faint);font-size:16px;font-weight:600;

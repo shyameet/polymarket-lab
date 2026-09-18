@@ -91,6 +91,18 @@ const isChurn = (t) =>
 // outcome and cannot be mirrored as one trade.
 const isCombo = (t) => !t.outcome && / AND /.test(t.title || '');
 
+// Requested explicitly: when a whale has more than one fill on the SAME
+// market, that is a stronger (or more complicated -- see `mixed`) signal than
+// a single isolated bet, and the plain trade-by-trade tape didn't say so.
+// Reads the fuller loaded trade set, not just what's currently visible in the
+// 5-minute tape window, so scaling-in over the last hour still counts.
+function marketActivity(wallet, condition) {
+  if (!condition) return null;
+  const same = state.trades.filter((t) => t.wallet === wallet && t.condition === condition);
+  if (same.length <= 1) return null;
+  return { count: same.length, mixed: new Set(same.map((t) => t.outcome)).size > 1 };
+}
+
 const VERDICT_WORD = {
   CANDIDATE: 'WORTH FOLLOWING',
   WATCH: 'PROMISING',
@@ -319,6 +331,7 @@ async function loadSnapshot() {
     state.snapshotMeta = f;
     for (const t of f.trades) addTrade(t, false);
     if (state.source !== 'live') { state.source = 'snapshot'; refreshSourceLabel(); }
+    migrateCopies();
   } catch { /* mid-deploy; next tick retries */ }
 }
 
@@ -329,6 +342,7 @@ async function loadPositions() {
     state.positions = { open: p.open || [], recently_closed: p.recently_closed || [] };
     state.posMeta = p;
     if (state.view === 'positions') renderPositions();
+    migrateCopies();
     checkCopies();
   } catch { /* mid-deploy; next tick retries */ }
 }
@@ -364,6 +378,31 @@ function removeCopy(key) {
   state.copies = state.copies.filter((c) => c.key !== key);
   saveCopies();
   renderMine();
+}
+
+// A copy saved before `condition` was tracked (or made while the source data
+// briefly lacked it) is permanently stuck on the old capped-board matching --
+// pollAllCopies() below skips anything without a condition, by design. That
+// reproduces the exact "goes blank" bug the live poll exists to fix, just for
+// copies that predate it. Rather than only telling the owner to delete and
+// re-copy it, try to recover the condition_id from whatever's currently
+// loaded (same wallet + market + outcome) and backfill it in place.
+function migrateCopies() {
+  let changed = false;
+  for (const c of state.copies) {
+    if (c.condition) continue;
+    const matches = (x) => x.wallet === c.wallet && x.condition
+      && (x.slug === c.slug || x.title === c.title) && (x.outcome || '') === (c.outcome || '');
+    const hit = state.trades.find(matches)
+      || state.positions.open.find(matches)
+      || state.positions.recently_closed.find(matches);
+    if (hit) {
+      c.condition = hit.condition;
+      c.key = posKey(c.wallet, c.slug, c.title, c.outcome, c.condition);
+      changed = true;
+    }
+  }
+  if (changed) { saveCopies(); pollAllCopies(); }
 }
 
 /* ──────────────── THE BLANK-OUT FIX: poll each copy LIVE ────────────────
@@ -552,6 +591,11 @@ function renderTrades() {
     who.appendChild(nm);
     if (t.verdict) who.appendChild(verdictPill(t.verdict));
     if (combo) who.appendChild(el('span', 'tag', 'PARLAY'));
+    const activity = marketActivity(t.wallet, t.condition);
+    if (activity) {
+      who.appendChild(el('span', 'tag stack',
+        activity.mixed ? '⇄ both sides of this market' : `🔁 ${activity.count}× this market`));
+    }
     li.appendChild(who);
 
     const right = el('div');
