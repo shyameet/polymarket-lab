@@ -89,6 +89,7 @@ def _normalize(p: dict, card: dict, status: str) -> dict:
         "status": status,                      # OPEN | CLOSED, a fact from the API
         "title": p.get("title") or "",
         "slug": p.get("slug") or "",
+        "condition": p.get("condition_id") or "",
         "outcome": p.get("outcome") or "",
         "avg_price": round(avg_price, 4),
         "current_price": round(current_price, 4),

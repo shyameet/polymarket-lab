@@ -5,10 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and a warning the moment they get out.">
-<link rel="stylesheet" href="style.css?v=20260917d">
+<link rel="stylesheet" href="style.css?v=20260918a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
 </head>
 <body>
+
+<!-- Indra Quant brand block: logo + wordmark, separated above the title,
+     per notes/INDRAQUANT_BRANDING.md — logo used as-is, primary orange rule. -->
+<div class="ivblock">
+  <div class="ivrow">
+    <img src="brand/logo.png" alt="Indra Quant" class="ivlogo">
+    <img src="brand/wordmark.png" alt="I/Q Indra/Quant" class="ivword">
+  </div>
+  <div class="ivrule"></div>
+</div>
 
 <header class="top">
   <div class="brand">
@@ -42,6 +52,7 @@
 
 <nav class="seg" role="tablist">
   <button class="segbtn active" data-view="whales" role="tab">Who to follow</button>
+  <button class="segbtn" data-view="soon" role="tab">Closing soon</button>
   <button class="segbtn" data-view="trades" role="tab">Live buys</button>
   <button class="segbtn" data-view="positions" role="tab">What they hold</button>
   <button class="segbtn" data-view="mine" role="tab">My copies<span id="mine-badge" class="badge" hidden>0</span></button>
@@ -93,6 +104,29 @@
   <p id="board-empty" class="empty" hidden>Nothing matches these filters.</p>
 </section>
 
+<!-- ───────────────────────────── CLOSING SOON ───────────────────────────── -->
+<section id="view-soon" class="view" hidden>
+  <div class="callout">
+    <b>Every open market, grouped by how soon it closes.</b> Whale-independent —
+    this is what can be traded right now. All times are UTC, not IST or ET.
+  </div>
+
+  <div class="controls">
+    <div class="chips" id="soon-chips">
+      <button class="chip active" data-bucket="hours">Next few hours</button>
+      <button class="chip" data-bucket="today">By end of today</button>
+      <button class="chip" data-bucket="weekend">By the weekend</button>
+      <button class="chip" data-bucket="month">By month end</button>
+      <button class="chip" data-bucket="year">By year end</button>
+    </div>
+  </div>
+
+  <div id="soon-stats" class="statrow"></div>
+
+  <ul id="soon-list" class="tape"></ul>
+  <p id="soon-empty" class="empty">Loading…</p>
+</section>
+
 <!-- ───────────────────────────── LIVE BUYS ───────────────────────────── -->
 <section id="view-trades" class="view" hidden>
   <div class="controls">
@@ -110,8 +144,9 @@
     <button id="pause" class="btn">Pause</button>
   </div>
 
-  <p class="hint">Newest first, refreshing every couple of seconds. Tap a name for
-    their full record, or <b>Copy this</b> to track that you took the same bet.</p>
+  <p class="hint">Each bet stays visible for 5 minutes, then drops off on its own —
+    newest first. Tap a name for their full record, or the orange
+    <b>⚡ Copy this</b> button to track that you took the same bet.</p>
 
   <ul id="tape" class="tape"></ul>
   <p id="tape-empty" class="empty">Connecting…</p>
@@ -144,9 +179,10 @@
 <section id="view-mine" class="view" hidden>
   <div class="callout warn">
     <b>Positions you've copied.</b> Saved in this browser only — nothing is sent
-    anywhere, and no trade is ever placed for you. Each one is matched against
-    the whale you copied, so when <b>they</b> get out, this page tells you
-    loudly. It does not tell you that getting out is the right move — see
+    anywhere, and no trade is ever placed for you. Each one is checked directly
+    against Polymarket every few seconds, so when <b>they</b> get out, this page
+    tells you loudly — usually within seconds, not the next board refresh. It
+    does not tell you that getting out is the right move — see
     <a href="#" id="mine-method-link">how this works</a>.
   </div>
 
@@ -163,8 +199,8 @@
   <ul id="mine" class="tape"></ul>
   <p id="mine-empty" class="empty">
     You haven't copied anything yet.<br>
-    Go to <b>Live buys</b> or <b>What they hold</b> and press <b>Copy this</b> on a
-    bet you've taken. This page will then watch the whale for you.
+    Go to <b>Live buys</b> or <b>What they hold</b> and press <b>⚡ Copy this</b> on a
+    bet you've taken. This page will then watch the whale for you, live.
   </p>
 </section>
 
@@ -184,6 +220,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260917d" type="module"></script>
+<script src="app.js?v=20260918a" type="module"></script>
 </body>
 </html>

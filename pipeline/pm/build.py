@@ -22,6 +22,7 @@ from typing import Any
 
 from . import api
 from .feed import build_feed
+from .markets import build_markets_soon
 from .positions import build_positions
 from .score import score_wallet
 
@@ -218,6 +219,8 @@ def main() -> int:
                     help="skip the screened-whale trade feed")
     ap.add_argument("--no-positions", action="store_true",
                     help="skip the open/recently-closed position tracker")
+    ap.add_argument("--no-markets", action="store_true",
+                    help="skip the closing-soon markets sweep")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -308,6 +311,11 @@ def main() -> int:
         meta["positions_open"] = len(positions["open"])
         meta["positions_recently_closed"] = len(positions["recently_closed"])
         _write(os.path.join(args.out, "whale_positions.json"), positions)
+
+    if not args.no_markets:
+        markets_soon = build_markets_soon(now_ts=now_ts, log=log)
+        meta["markets_soon"] = {k: len(v) for k, v in markets_soon["buckets"].items()}
+        _write(os.path.join(args.out, "markets_soon.json"), markets_soon)
 
     _write(os.path.join(args.out, "meta.json"), meta)
 

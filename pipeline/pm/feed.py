@@ -125,6 +125,9 @@ def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[
                     "outcome": t.get("outcome") or "",
                     "title": title,
                     "slug": slug,
+                    # needed so the browser can poll THIS exact position live,
+                    # bypassing the per-wallet cap on the committed positions file
+                    "condition": t.get("conditionId") or "",
                     "tx": t.get("transactionHash") or "",
                 })
 

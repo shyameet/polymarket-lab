@@ -48,6 +48,7 @@ const state = {
   stamps: [], directFails: 0, ws: null, backoff: 1000, pinger: null,
   view: 'whales', who: 'best', verdict: 'good', category: '', posFilter: 'all',
   hintShown: false, notified: new Set(),
+  marketsSoon: null, marketsBucket: 'hours',
 };
 
 /* ─────────────────────────── format helpers ─────────────────────────── */
@@ -63,6 +64,14 @@ const money = (v, cents = false) => {
 };
 const pct = (v, d = 0) => (v == null ? '—' : `${(v * 100).toFixed(d)}%`);
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
+// Polymarket falls back to a wallet's raw address as its own "user_name" when
+// no display name is set. Caught on mobile: that 42-char unbroken string blew
+// out the page width (a flex/grid item can force its ancestors wider than the
+// viewport when its content has no break point). Never trust "name" without
+// checking it isn't secretly an address.
+const looksLikeAddress = (s) => /^0x[a-fA-F0-9]{38,42}$/.test(s || '');
+const displayName = (name, wallet) =>
+  (name && !looksLikeAddress(name)) ? name : short(wallet);
 const sign = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'mut');
 const ago = (ts) => {
   if (!ts) return '—';
@@ -104,9 +113,16 @@ const marketLink = (title, slug) => {
   return a;
 };
 
-// stable key so a copied bet can be matched back to the whale's position
-const posKey = (wallet, slug, title, outcome) =>
-  `${(wallet || '').toLowerCase()}|${slug || title || ''}|${outcome || ''}`;
+// Stable key so a copied bet can be matched back to the whale's position.
+// condition_id (Polymarket's own on-chain market id) is preferred when we have
+// it -- it is exact, unlike matching on slug/title text. Falls back to the old
+// slug-based key for copies saved before this field existed, so nothing
+// already tracked in someone's browser silently breaks.
+const posKey = (wallet, slug, title, outcome, condition) => {
+  const w = (wallet || '').toLowerCase();
+  if (condition) return `${w}|c:${condition}|${outcome || ''}`;
+  return `${w}|${slug || title || ''}|${outcome || ''}`;
+};
 
 /* ─────────────────────────── relay / source ─────────────────────────── */
 
@@ -144,6 +160,7 @@ function addTrade(raw, live) {
     usd: raw.usd != null ? Number(raw.usd) : size * price,
     outcome: raw.outcome || '', title: raw.title || '',
     slug: raw.slug || raw.eventSlug || '',
+    condition: raw.condition || raw.conditionId || '',
     tx: raw.tx || raw.transactionHash || '',
     live: !!live,
   };
@@ -290,18 +307,19 @@ function saveCopies() {
   updateMineBadge();
 }
 
-function addCopy({ wallet, name, verdict, title, slug, outcome, price, stake }) {
-  const key = posKey(wallet, slug, title, outcome);
+function addCopy({ wallet, name, verdict, title, slug, outcome, price, stake, condition }) {
+  const key = posKey(wallet, slug, title, outcome, condition);
   if (state.copies.some((c) => c.key === key)) return false;   // already tracking
   state.copies.push({
     key, wallet: (wallet || '').toLowerCase(), name, verdict,
-    title, slug, outcome,
+    title, slug, outcome, condition: condition || '',
     entryPrice: price, stake,
     shares: price > 0 ? stake / price : 0,
     addedAt: Math.floor(Date.now() / 1000),
+    live: null,          // filled in by pollAllCopies() -- see below
   });
   saveCopies();
-  checkCopies();
+  pollAllCopies();
   return true;
 }
 
@@ -311,20 +329,91 @@ function removeCopy(key) {
   renderMine();
 }
 
-/** Match each copy against the whale's current positions. */
+/* ──────────────── THE BLANK-OUT FIX: poll each copy LIVE ────────────────
+ *
+ * Root cause of copies "going blank": whale_positions.json caps every whale
+ * at 12 open / 8 closed positions server-side (see positions.py), sorted by
+ * position VALUE descending. A busy whale routinely has hundreds of open
+ * positions -- confirmed live, has_more stayed true past position #1 sorted
+ * by value. So a copy of a whale's SMALLER or NEWER bet falls outside that
+ * top-12 slice on the next 15-30 minute rebuild and silently disappears from
+ * what the site can see, even though the whale still holds it.
+ *
+ * The fix: for tracked copies specifically -- a small, known set -- query
+ * Polymarket's OWN position endpoint directly from THIS browser for exactly
+ * that wallet + that market. CORS is open (verified: access-control-allow-
+ * origin: *), no server cap applies because we ask for one specific position,
+ * not "give me your top N". This bypasses the committed-JSON staleness
+ * entirely for anything you're actively tracking.
+ */
+const POLY_DATA = 'https://data-api.polymarket.com/v2';
+const COPY_POLL_MS = 5000;   // as close to "every second" as is polite to an
+                              // unauthenticated public API for a handful of rows
+
+async function liveCopyLookup(wallet, condition, outcome) {
+  // Omitting status defaults to OPEN only server-side (verified) -- a closed
+  // position returns an empty array, indistinguishable from "never existed".
+  // So: ask OPEN first; only if that is empty do we ask CLOSED, which is the
+  // one call that actually tells us "yes, they exited, here is when".
+  //
+  // MUST filter by outcome, not just "did the condition return any row at
+  // all". A binary market has two outcome tokens (Yes/No) under one
+  // condition_id, and a wallet can hold one OPEN while the other is CLOSED --
+  // caught live in testing: a wallet had realized +$6,467 exiting "Yes" while
+  // still holding an unrelated open "No" position on the same market. An
+  // unfiltered check would have reported the Yes copy as "still in", which is
+  // worse than the original blank-out bug -- confidently wrong instead of
+  // honestly unknown.
+  const base = `${POLY_DATA}/positions?user=${wallet}&condition=${condition}`;
+  try {
+    const open = await fetch(`${base}&status=OPEN`).then((r) => r.json());
+    const openMatch = (open?.data || []).filter((r) => (r.outcome || '') === (outcome || ''));
+    if (openMatch.length) return { state: 'in', rows: openMatch, checkedAt: Date.now() };
+
+    const closed = await fetch(`${base}&status=CLOSED`).then((r) => r.json());
+    const closedMatch = (closed?.data || []).filter((r) => (r.outcome || '') === (outcome || ''));
+    if (closedMatch.length) return { state: 'exited', rows: closedMatch, checkedAt: Date.now() };
+
+    return { state: 'unknown', rows: [], checkedAt: Date.now() };
+  } catch {
+    return null;   // network hiccup -- keep whatever we had, don't flip to unknown
+  }
+}
+
+async function pollAllCopies() {
+  const targets = state.copies.filter((c) => c.condition);
+  await Promise.all(targets.map(async (c) => {
+    const result = await liveCopyLookup(c.wallet, c.condition, c.outcome);
+    if (result) c.live = result;   // null (failed fetch) leaves the last-known value
+  }));
+  checkCopies();
+}
+
+/** Match one copy against what we know. Live poll result wins when we have
+ * one (exact, un-capped); the committed board is the fallback for copies
+ * saved before `condition` was tracked, or while the first poll is in flight. */
 function copyStatus(c) {
-  const openHit = state.positions.open.find((p) => posKey(p.wallet, p.slug, p.title, p.outcome) === c.key);
-  if (openHit) {
-    return { state: 'in', price: openHit.current_price, whalePos: openHit };
+  if (c.live) {
+    const row = c.live.rows.find((r) => (r.outcome || '') === (c.outcome || '')) || c.live.rows[0];
+    if (c.live.state === 'in') {
+      return { state: 'in', price: row?.current_price, whalePos: row, checkedAt: c.live.checkedAt };
+    }
+    if (c.live.state === 'exited') {
+      return {
+        state: 'exited', exitedAt: row?.last_event_at, whalePos: row,
+        checkedAt: c.live.checkedAt,
+      };
+    }
+    // live poll ran and found nothing in open OR closed -- genuinely unknown,
+    // not a stale-cap artifact, so trust it over the committed fallback below.
+    return { state: 'unknown', checkedAt: c.live.checkedAt };
   }
+
+  const openHit = state.positions.open.find((p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
+  if (openHit) return { state: 'in', price: openHit.current_price, whalePos: openHit };
   const closedHit = state.positions.recently_closed.find(
-    (p) => posKey(p.wallet, p.slug, p.title, p.outcome) === c.key);
-  if (closedHit) {
-    return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
-  }
-  // Not in either list. We simply cannot see it -- the whale may have closed it
-  // outside the 7-day window, or they may not be in the tracked set at all.
-  // Saying "unknown" is honest; claiming they exited would not be.
+    (p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
+  if (closedHit) return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
   return { state: 'unknown' };
 }
 
@@ -337,7 +426,7 @@ function checkCopies() {
       if ($('#mine-notify')?.checked && !state.notified.has(c.key)
           && Notification?.permission === 'granted') {
         state.notified.add(c.key);
-        new Notification(`${c.name || short(c.wallet)} has EXITED`, {
+        new Notification(`${displayName(c.name, c.wallet)} has EXITED`, {
           body: `${c.title || ''} — they got out ${ago(st.exitedAt)} ago. You're still in.`,
           tag: c.key,
         });
@@ -359,14 +448,14 @@ function updateMineBadge(alerts) {
 
 function copyButton(data) {
   const already = state.copies.some(
-    (c) => c.key === posKey(data.wallet, data.slug, data.title, data.outcome));
-  const btn = el('button', `btn small ${already ? '' : 'copy'}`,
-    already ? '✓ Tracking' : 'Copy this');
+    (c) => c.key === posKey(data.wallet, data.slug, data.title, data.outcome, data.condition));
+  const btn = el('button', `btn copybtn ${already ? 'tracking' : ''}`,
+    already ? '✓ Tracking' : '⚡ Copy this');
   if (already) btn.disabled = true;
   btn.addEventListener('click', () => {
     if (addCopy(data)) {
       btn.textContent = '✓ Tracking';
-      btn.className = 'btn small';
+      btn.className = 'btn copybtn tracking';
       btn.disabled = true;
     }
   });
@@ -375,10 +464,18 @@ function copyButton(data) {
 
 /* ──────────────────────────── live buys ─────────────────────────────── */
 
+// A bet stays visible for TRADE_VISIBLE_S after it happened, then drops off --
+// requested explicitly: rows should hang around for at least 5 minutes rather
+// than being pushed off by whatever arrived after them. MAX_ROWS is kept only
+// as a safety valve against a genuine flood, not the normal way rows leave.
+const TRADE_VISIBLE_S = 5 * 60;
+
 function visibleTrades() {
   const min = Number($('#t-min').value) || 0;
+  const cutoff = Date.now() / 1000 - TRADE_VISIBLE_S;
   return state.trades
     .filter((t) => {
+      if (t.ts < cutoff) return false;
       if (t.usd < min) return false;
       if (state.who === 'best') return t.verdict === 'CANDIDATE' || t.verdict === 'WATCH';
       if (state.who === 'all') return !!t.verdict;
@@ -412,7 +509,7 @@ function renderTrades() {
     const li = el('li', `row${fresh ? ' fresh' : ''}`);
 
     const who = el('div', 'who');
-    const nm = el('span', 'nm', t.name || short(t.wallet));
+    const nm = el('span', 'nm', displayName(t.name, t.wallet));
     const card = state.byWallet.get(t.wallet);
     if (card) nm.addEventListener('click', () => openDrawer(card));
     who.appendChild(nm);
@@ -452,7 +549,7 @@ function renderTrades() {
       actions.appendChild(copyButton({
         wallet: t.wallet, name: t.name, verdict: t.verdict,
         title: t.title, slug: t.slug, outcome: t.outcome,
-        price: t.price, stake,
+        price: t.price, stake, condition: t.condition,
       }));
       li.appendChild(actions);
     }
@@ -491,7 +588,7 @@ function renderPositions() {
     const li = el('li', 'row');
 
     const who = el('div', 'who');
-    const nm = el('span', 'nm', p.name || short(p.wallet));
+    const nm = el('span', 'nm', displayName(p.name, p.wallet));
     const card = state.byWallet.get((p.wallet || '').toLowerCase());
     if (card) nm.addEventListener('click', () => openDrawer(card));
     who.appendChild(nm);
@@ -531,7 +628,7 @@ function renderPositions() {
         wallet: p.wallet, name: p.name, verdict: p.verdict,
         title: p.title, slug: p.slug, outcome: p.outcome,
         price: p.current_price || p.avg_price,
-        stake: Number($('#t-stake')?.value) || 25,
+        stake: Number($('#t-stake')?.value) || 25, condition: p.condition,
       }));
       li.appendChild(actions);
     }
@@ -553,6 +650,98 @@ function renderPositionStats() {
   add('Still holding', String(state.positions.open.length));
   add('Got out (7 days)', String(state.positions.recently_closed.length));
   if (state.posMeta?.generated_at) add('Updated', `${ago(state.posMeta.generated_at)} ago`);
+}
+
+/* ─────────────────────────── closing soon (markets) ──────────────────── *
+ * Market-centric rather than whale-centric: what can be traded right now,
+ * grouped by how soon it closes. Requested as the priority feature -- "few
+ * hours to day-end" is the stated primary trading window -- so it defaults to
+ * that bucket, not the widest one. */
+
+const BUCKET_LABEL = { hours: 'Next few hours', today: 'By end of today',
+  weekend: 'By end of the weekend', month: 'By end of the month', year: 'By end of the year' };
+
+async function loadMarketsSoon() {
+  try {
+    const m = await fetch('data/markets_soon.json', { cache: 'no-cache' }).then((r) => r.json());
+    if (!m?.buckets) return;
+    state.marketsSoon = m;
+    if (state.view === 'soon') renderMarketsSoon();
+  } catch { /* mid-deploy; next tick retries */ }
+}
+
+// countdown string from an ISO end_date to now
+function closesIn(iso) {
+  if (!iso) return '—';
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return 'closing now';
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `closes in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `closes in ${hrs}h ${mins % 60}m`;
+  return `closes in ${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+}
+
+function renderMarketsSoon() {
+  const list = $('#soon-list');
+  const empty = $('#soon-empty');
+  if (!list) return;
+  const data = state.marketsSoon;
+  if (!data) { empty.hidden = false; empty.textContent = 'Loading…'; list.textContent = ''; return; }
+
+  const rows = data.buckets[state.marketsBucket] || [];
+  const statBox = $('#soon-stats');
+  if (statBox) {
+    statBox.textContent = '';
+    const add = (k, v) => {
+      const d = el('div', 'stat');
+      d.appendChild(el('div', 'k', k));
+      d.appendChild(el('div', 'v', v));
+      statBox.appendChild(d);
+    };
+    add('Open markets', String(rows.length));
+    add('Window ends', closesIn(data.bucket_ends?.[state.marketsBucket]));
+    if (data.generated_at) add('Updated', `${ago(data.generated_at)} ago`);
+  }
+
+  list.textContent = '';
+  if (!rows.length) {
+    empty.hidden = false;
+    empty.textContent = 'Nothing open in this window right now.';
+    return;
+  }
+  empty.hidden = true;
+
+  const frag = document.createDocumentFragment();
+  for (const m of rows) {
+    const li = el('li', 'row');
+
+    const who = el('div', 'who');
+    who.appendChild(marketLink(m.title, m.slug));
+    if (m.neg_risk) who.appendChild(el('span', 'tag plain', 'multi-outcome'));
+    li.appendChild(who);
+
+    const right = el('div');
+    right.appendChild(el('div', 'headline-num', money(m.volume)));
+    right.appendChild(el('div', 'headline-sub', 'total volume'));
+    li.appendChild(right);
+
+    const says = el('div', 'says');
+    if (m.outcomes?.length === 2 && m.prices?.length === 2) {
+      says.innerHTML = `<b>${m.outcomes[0]}</b> ${(m.prices[0] * 100).toFixed(0)}¢ · `
+        + `<b>${m.outcomes[1]}</b> ${(m.prices[1] * 100).toFixed(0)}¢`;
+    } else {
+      says.textContent = `${m.outcomes?.length || '?'} outcomes`;
+    }
+    li.appendChild(says);
+
+    const mk = el('div', 'mkt');
+    mk.textContent = `${closesIn(m.end_date)} · liquidity ${money(m.liquidity)}`;
+    li.appendChild(mk);
+
+    frag.appendChild(li);
+  }
+  list.appendChild(frag);
 }
 
 /* ───────────────────────────── my copies ────────────────────────────── */
@@ -607,15 +796,26 @@ function renderMine() {
 
     if (st.state === 'exited') {
       li.appendChild(el('div', 'alert-banner',
-        `⚠ ${c.name || short(c.wallet)} GOT OUT ${ago(st.exitedAt)} ago — you may still be in.`));
+        `⚠ ${displayName(c.name, c.wallet)} GOT OUT ${ago(st.exitedAt)} ago — you may still be in.`));
     }
 
     const who = el('div', 'who');
-    who.appendChild(el('span', 'nm', c.name || short(c.wallet)));
+    who.appendChild(el('span', 'nm', displayName(c.name, c.wallet)));
     if (c.verdict) who.appendChild(verdictPill(c.verdict));
     who.appendChild(el('span',
       `pstatus ${st.state === 'in' ? 'open' : 'exited'}`,
       st.state === 'in' ? 'THEY\'RE STILL IN' : st.state === 'exited' ? 'THEY\'RE OUT' : 'CAN\'T SEE'));
+    // Prove it's actually live, not stuck -- this is the direct fix for
+    // "goes blank and I don't see the update": show exactly when it was last
+    // checked, and whether that check was a live per-position poll (fast,
+    // un-capped) or the slower board-wide snapshot.
+    if (st.checkedAt) {
+      const liveTag = el('span', 'tag plain',
+        `checked ${Math.max(1, Math.round((Date.now() - st.checkedAt) / 1000))}s ago`);
+      who.appendChild(liveTag);
+    } else if (!c.condition) {
+      who.appendChild(el('span', 'tag plain', 'older copy — re-add for live tracking'));
+    }
     li.appendChild(who);
 
     // your own P&L on the copy, if we can price it
@@ -643,10 +843,11 @@ function renderMine() {
     li.appendChild(mk);
 
     if (st.state === 'unknown') {
-      li.appendChild(el('div', 'why',
-        "This position isn't in the whale's currently-tracked holdings or their last 7 days of "
-        + 'exits, so their status genuinely cannot be confirmed right now — not the same as them '
-        + 'having got out.'));
+      li.appendChild(el('div', 'why', st.checkedAt
+        ? "Just checked Polymarket directly for this exact position and found nothing open or "
+          + 'recently closed — genuinely unclear, not the same as them having got out.'
+        : "Not yet in the whale's currently-tracked holdings or their last 7 days of exits. A "
+          + 'live check runs every few seconds and will update this shortly.'));
     }
 
     const actions = el('div', 'actions');
@@ -725,7 +926,7 @@ function renderBoard() {
 
     const who = el('div', 'who');
     who.appendChild(el('span', 'rank', String(i + 1)));
-    const nm = el('span', 'nm', c.name || short(c.wallet));
+    const nm = el('span', 'nm', displayName(c.name, c.wallet));
     nm.addEventListener('click', () => openDrawer(c));
     who.appendChild(nm);
     who.appendChild(verdictPill(c.verdict));
@@ -798,7 +999,7 @@ function renderBoardStats(rows) {
 function openDrawer(c) {
   const b = $('#drawer-body');
   b.textContent = '';
-  b.appendChild(el('h2', 'dh', c.name || short(c.wallet)));
+  b.appendChild(el('h2', 'dh', displayName(c.name, c.wallet)));
   b.appendChild(el('p', 'dsub', c.wallet));
   b.appendChild(verdictPill(c.verdict));
   const cat = catOf(c);
@@ -910,14 +1111,14 @@ function renderMethod() {
      top of it does not predict tomorrow. Of <b>${state.whales.length}</b> traders
      checked here, <b>${failed}</b> are ruled out.`);
   if (richest) {
-    p(`The current top earner is <b>${richest.name || short(richest.wallet)}</b> at
+    p(`The current top earner is <b>${displayName(richest.name, richest.wallet)}</b> at
        <b>${money(richest.position_pnl)}</b> — but <b>${pct(richest.concentration)}</b> of
        that came from a single bet, and only
        <b>${(richest.pct_positive_months ?? 0).toFixed(0)}%</b> of their months were
        profitable. That is a lottery ticket, not a method.`);
   }
   if (mm) {
-    p(`<b>${mm.name || short(mm.wallet)}</b> looks steadier —
+    p(`<b>${displayName(mm.name, mm.wallet)}</b> looks steadier —
        <b>${(mm.pct_positive_months ?? 0).toFixed(0)}%</b> winning months. But
        <b>${pct(mm.program_share)}</b> of that profit is rebates for providing liquidity,
        not bets you could copy. They are a market maker: they earn the spread you would
@@ -960,7 +1161,7 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon'];
 document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.segbtn').forEach((x) => x.classList.remove('active'));
   b.classList.add('active');
@@ -968,7 +1169,8 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
   VIEWS.forEach((v) => { $(`#view-${v}`).hidden = state.view !== v; });
   if (state.view === 'trades') state.dirty = true;
   if (state.view === 'positions') renderPositions();
-  if (state.view === 'mine') renderMine();
+  if (state.view === 'mine') { renderMine(); pollAllCopies(); }
+  if (state.view === 'soon') renderMarketsSoon();
 }));
 
 const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
@@ -981,6 +1183,7 @@ chipBar('#t-chips', (b) => { state.who = b.dataset.who; state.dirty = true; });
 chipBar('#p-chips', (b) => { state.posFilter = b.dataset.p; renderPositions(); });
 chipBar('#w-chips', (b) => { state.verdict = b.dataset.v; renderBoard(); });
 chipBar('#w-cat-chips', (b) => { state.category = b.dataset.cat; renderBoard(); });
+chipBar('#soon-chips', (b) => { state.marketsBucket = b.dataset.bucket; renderMarketsSoon(); });
 
 $('#w-sort').addEventListener('change', renderBoard);
 $('#t-min').addEventListener('input', () => { state.dirty = true; });
@@ -1052,6 +1255,15 @@ setInterval(() => {
 
 setInterval(() => { loadSnapshot(); loadPositions(); }, REFRESH_POLL_MS);
 
+// The actual fix for "goes blank": poll every tracked copy directly and
+// continuously, independent of the once-per-15-30-minute board rebuild. Runs
+// regardless of which tab is open (an exit while you're on Live buys should
+// still update the badge), just skips the DOM repaint unless you're looking.
+setInterval(() => { if (state.copies.length) pollAllCopies(); }, COPY_POLL_MS);
+
 loadCopies();
 updateMineBadge();
 loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);
+if (state.copies.length) pollAllCopies();
+loadMarketsSoon();
+setInterval(loadMarketsSoon, REFRESH_POLL_MS);
