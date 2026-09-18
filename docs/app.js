@@ -49,6 +49,7 @@ const state = {
   view: 'whales', who: 'best', verdict: 'good', category: '', posFilter: 'all',
   hintShown: false, notified: new Set(),
   marketsSoon: null, marketsBucket: 'hours',
+  cryptoFlows: null,
 };
 
 /* ─────────────────────────── format helpers ─────────────────────────── */
@@ -875,6 +876,86 @@ function renderMarketsSoon() {
   list.appendChild(frag);
 }
 
+/* ───────────────────────────── crypto flows ──────────────────────────── *
+ * A DIFFERENT kind of whale entirely -- large USDT/USDC transfers on
+ * Ethereum, from public on-chain data (Blockscout), not Polymarket. Binance
+ * was ruled out (its public API is fully anonymous -- no trader identity at
+ * any price) and Whale Alert was ruled out (no free API tier, and even paid
+ * it only attributes to entities, not individual traders). This is the one
+ * free, public, wallet-level source left -- but it is a fund movement, not a
+ * trade, so there is deliberately no "copy this" anywhere in this section. */
+
+async function loadCryptoFlows() {
+  try {
+    const f = await fetch('data/crypto_flows.json', { cache: 'no-cache' }).then((r) => r.json());
+    if (!f?.flows) return;
+    state.cryptoFlows = f;
+    if (state.view === 'flows') renderCryptoFlows();
+  } catch { /* mid-deploy, or the sweep failed this cycle -- next tick retries */ }
+}
+
+function renderCryptoFlows() {
+  const list = $('#flows-list');
+  const empty = $('#flows-empty');
+  if (!list) return;
+  const data = state.cryptoFlows;
+  if (!data) { empty.hidden = false; empty.textContent = 'Loading…'; list.textContent = ''; return; }
+
+  const statBox = $('#flows-stats');
+  if (statBox) {
+    statBox.textContent = '';
+    const add = (k, v) => {
+      const d = el('div', 'stat');
+      d.appendChild(el('div', 'k', k));
+      d.appendChild(el('div', 'v', v));
+      statBox.appendChild(d);
+    };
+    add('Transfers shown', String(data.flows.length));
+    add('Minimum size', money(data.min_usd));
+    if (data.generated_at) add('Updated', `${ago(data.generated_at)} ago`);
+  }
+
+  list.textContent = '';
+  if (!data.flows.length) {
+    empty.hidden = false;
+    empty.textContent = `Nothing at or above ${money(data.min_usd)} in the last check — `
+      + 'a quieter moment, not a broken feed.';
+    return;
+  }
+  empty.hidden = true;
+
+  const frag = document.createDocumentFragment();
+  for (const f of data.flows) {
+    const li = el('li', 'row');
+
+    const who = el('div', 'who');
+    who.appendChild(el('span', 'nm', f.symbol));
+    who.appendChild(el('span', 'tag plain', 'on-chain, not Polymarket'));
+    li.appendChild(who);
+
+    const right = el('div');
+    right.appendChild(el('div', 'headline-num', money(f.usd)));
+    right.appendChild(el('div', 'headline-sub', `${ago(f.ts)} ago`));
+    li.appendChild(right);
+
+    const says = el('div', 'says');
+    says.appendChild(document.createTextNode('From '));
+    says.appendChild(el('b', null, f.from_label || short(f.from)));
+    says.appendChild(document.createTextNode(' to '));
+    says.appendChild(el('b', null, f.to_label || short(f.to)));
+    li.appendChild(says);
+
+    const mk = el('div', 'mkt');
+    const a = el('a', null, `${f.amount.toLocaleString()} ${f.symbol} on Etherscan`);
+    if (f.tx) { a.href = `https://etherscan.io/tx/${f.tx}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    mk.appendChild(a);
+    li.appendChild(mk);
+
+    frag.appendChild(li);
+  }
+  list.appendChild(frag);
+}
+
 /* ───────────────────────────── my copies ────────────────────────────── */
 
 function renderMine() {
@@ -1292,7 +1373,7 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows'];
 document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.segbtn').forEach((x) => x.classList.remove('active'));
   b.classList.add('active');
@@ -1302,6 +1383,7 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
   if (state.view === 'positions') renderPositions();
   if (state.view === 'mine') { renderMine(); pollAllCopies(); }
   if (state.view === 'soon') renderMarketsSoon();
+  if (state.view === 'flows') renderCryptoFlows();
 }));
 
 const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
@@ -1403,3 +1485,6 @@ loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(con
 if (state.copies.length) pollAllCopies();
 loadMarketsSoon();
 setInterval(loadMarketsSoon, REFRESH_POLL_MS);
+
+loadCryptoFlows();
+setInterval(loadCryptoFlows, REFRESH_POLL_MS);

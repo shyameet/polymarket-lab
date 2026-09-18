@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 from . import api
+from .crypto_flows import build_crypto_flows
 from .feed import build_feed
 from .markets import build_markets_soon
 from .positions import build_positions
@@ -221,6 +222,8 @@ def main() -> int:
                     help="skip the open/recently-closed position tracker")
     ap.add_argument("--no-markets", action="store_true",
                     help="skip the closing-soon markets sweep")
+    ap.add_argument("--no-crypto-flows", action="store_true",
+                    help="skip the large-stablecoin-transfer sweep (Blockscout)")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -316,6 +319,17 @@ def main() -> int:
         markets_soon = build_markets_soon(now_ts=now_ts, log=log)
         meta["markets_soon"] = {k: len(v) for k, v in markets_soon["buckets"].items()}
         _write(os.path.join(args.out, "markets_soon.json"), markets_soon)
+
+    # Independent of Polymarket entirely -- Blockscout, not the data-api. One
+    # bad response here must not take down the whale board, so build.py's own
+    # try/except around a bad wallet score is mirrored at this call site too.
+    if not args.no_crypto_flows:
+        try:
+            crypto_flows = build_crypto_flows(now_ts=now_ts, log=log)
+            meta["crypto_flows"] = len(crypto_flows["flows"])
+            _write(os.path.join(args.out, "crypto_flows.json"), crypto_flows)
+        except Exception as e:  # noqa: BLE001 - optional section, never blocks a publish
+            log(f"  ! crypto_flows failed, skipping this cycle: {e}")
 
     _write(os.path.join(args.out, "meta.json"), meta)
 

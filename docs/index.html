@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and a warning the moment they get out.">
-<link rel="stylesheet" href="style.css?v=20260918e">
+<link rel="stylesheet" href="style.css?v=20260918f">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -56,6 +56,7 @@
   <button class="segbtn" data-view="trades" role="tab">Live buys</button>
   <button class="segbtn" data-view="positions" role="tab">What they hold</button>
   <button class="segbtn" data-view="mine" role="tab">My copies<span id="mine-badge" class="badge" hidden>0</span></button>
+  <button class="segbtn" data-view="flows" role="tab">Crypto flows</button>
 </nav>
 
 <!-- ───────────────────────── WHO TO FOLLOW ───────────────────────── -->
@@ -204,6 +205,22 @@
   </p>
 </section>
 
+<!-- ───────────────────────────── CRYPTO FLOWS ───────────────────────────── -->
+<section id="view-flows" class="view" hidden>
+  <div class="callout warn">
+    <b>Large USDT/USDC transfers on Ethereum — not a Polymarket trade, and nothing here
+    can be copied.</b> A wallet moving funds might precede a sale, might be a treasury
+    rebalance, might be nothing at all. Read this as a heads-up about where money is
+    moving, not a signal to act on. Public on-chain data, refreshed alongside everything
+    else.
+  </div>
+
+  <div id="flows-stats" class="statrow"></div>
+
+  <ul id="flows-list" class="tape"></ul>
+  <p id="flows-empty" class="empty">Loading…</p>
+</section>
+
 <!-- ───────────────────────────── DRAWER ───────────────────────────── -->
 <div id="drawer" class="drawer" hidden>
   <div class="drawer-inner">
@@ -220,6 +237,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260918e" type="module"></script>
+<script src="app.js?v=20260918f" type="module"></script>
 </body>
 </html>
