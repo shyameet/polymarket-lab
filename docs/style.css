@@ -132,6 +132,19 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
   box-shadow:none;font-weight:600;
 }
 
+/* small secondary action beside a market title -- copies just the plain name
+   to the clipboard for pasting into Polymarket's own search. Deliberately
+   quiet: .copybtn (above) is the loud one, this is not a trading action. */
+.copytitle{
+  display:inline-flex;align-items:center;gap:5px;
+  background:none;border:1px solid var(--line);color:var(--faint);
+  padding:2px 9px;border-radius:7px;font-size:12.5px;cursor:pointer;
+  margin-left:8px;vertical-align:middle;
+}
+.copytitle:hover{border-color:var(--orange);color:var(--orange)}
+.copytitle.copied{border-color:var(--green);color:var(--green)}
+.copytitle.failed{border-color:var(--red);color:var(--red)}
+
 /* ── stat row ───────────────────────────────────────────────────────── */
 .statrow{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
 .stat{
@@ -243,6 +256,21 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
   padding:11px 16px;border-radius:10px;font-size:15.5px;line-height:1.45;
 }
 .actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;padding-top:6px}
+
+/* whale fills cross-referenced onto a closing-soon market -- "is anyone
+   worth following already on this one, and which side" */
+.whalebets{grid-column:1/-1;margin-top:2px;padding-top:10px;border-top:1px solid var(--line2)}
+.wblabel{font-size:13px;color:var(--gold);font-weight:600;margin-bottom:6px}
+.wbrow{font-size:14.5px;color:var(--dim);line-height:1.6;overflow-wrap:anywhere}
+.wbrow b{color:var(--fg)}
+.wbrow.mut{color:var(--faint);font-size:13.5px}
+/* same unbroken-token defense as .nm -- see its comment in the card rules
+   above: a name with no space to wrap on can force the page wider than the
+   viewport. .wbname truncates it instead of letting it run. */
+.wbname{display:inline-block;max-width:min(55vw,220px);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.whalebets .copybtn{margin-top:8px}
+.wbempty{grid-column:1/-1;font-size:13.5px;color:var(--faint);padding-top:8px}
 
 /* ── drawer ─────────────────────────────────────────────────────────── */
 .drawer{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:50;display:flex;

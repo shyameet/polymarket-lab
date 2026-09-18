@@ -65,11 +65,15 @@ const money = (v, cents = false) => {
 const pct = (v, d = 0) => (v == null ? '—' : `${(v * 100).toFixed(d)}%`);
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
 // Polymarket falls back to a wallet's raw address as its own "user_name" when
-// no display name is set. Caught on mobile: that 42-char unbroken string blew
-// out the page width (a flex/grid item can force its ancestors wider than the
-// viewport when its content has no break point). Never trust "name" without
-// checking it isn't secretly an address.
-const looksLikeAddress = (s) => /^0x[a-fA-F0-9]{38,42}$/.test(s || '');
+// no display name is set -- and sometimes to a longer address-derived id (seen
+// live: "0x477df235b7d1223f0664682ff385e62FFEDAFbb6-1771514724803", 56 chars).
+// Caught on mobile both times: an unbroken string with no space for the
+// browser to wrap on blows out the page width (a flex/grid item can force its
+// ancestors wider than the viewport when its content has no break point).
+// Deliberately loose -- "starts with 0x then a run of hex" -- rather than
+// matching one exact generated shape, since a real chosen display name
+// essentially never starts that way. Never trust "name" without checking.
+const looksLikeAddress = (s) => /^0x[a-fA-F0-9]{6,}/.test(s || '');
 const displayName = (name, wallet) =>
   (name && !looksLikeAddress(name)) ? name : short(wallet);
 const sign = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'mut');
@@ -112,6 +116,38 @@ const marketLink = (title, slug) => {
   if (slug) { a.href = `https://polymarket.com/event/${slug}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
   return a;
 };
+
+// Puts the market's plain name on the clipboard -- nothing is sent anywhere,
+// it is just text -- so it can be pasted straight into Polymarket's own
+// search instead of retyping a long title by hand.
+function copyMarketBtn(title) {
+  const btn = el('button', 'copytitle', '📋 Copy name');
+  btn.type = 'button';
+  btn.title = "Copy this market's name to paste into Polymarket's search";
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const text = title || '';
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch {
+      // clipboard API needs a secure context/permission grant; fall back to
+      // a selectable prompt so the text is still copyable by hand. prompt()
+      // itself is disallowed in a few embedded contexts, so this is guarded
+      // too -- an uncaught throw here would silently kill the feedback below.
+      try { window.prompt('Copy this market name:', text); copied = true; }
+      catch { /* both blocked -- fall through to the "couldn't copy" state */ }
+    }
+    btn.textContent = copied ? '✓ Copied' : "✗ Couldn't copy";
+    btn.classList.add(copied ? 'copied' : 'failed');
+    setTimeout(() => {
+      btn.textContent = '📋 Copy name';
+      btn.classList.remove('copied', 'failed');
+    }, 1500);
+  });
+  return btn;
+}
 
 // Stable key so a copied bet can be matched back to the whale's position.
 // condition_id (Polymarket's own on-chain market id) is preferred when we have
@@ -161,6 +197,7 @@ function addTrade(raw, live) {
     outcome: raw.outcome || '', title: raw.title || '',
     slug: raw.slug || raw.eventSlug || '',
     condition: raw.condition || raw.conditionId || '',
+    end_date: raw.end_date || '',
     tx: raw.tx || raw.transactionHash || '',
     live: !!live,
   };
@@ -533,6 +570,8 @@ function renderTrades() {
 
     const mk = el('div', 'mkt');
     mk.appendChild(marketLink(t.title, t.slug));
+    if (t.end_date) mk.appendChild(el('span', 'tag plain', closesIn(t.end_date)));
+    mk.appendChild(copyMarketBtn(t.title));
     li.appendChild(mk);
 
     if (combo) {
@@ -614,6 +653,7 @@ function renderPositions() {
 
     const mk = el('div', 'mkt');
     mk.appendChild(marketLink(p.title, p.slug));
+    mk.appendChild(copyMarketBtn(p.title));
     li.appendChild(mk);
 
     if (p.likely_hedge_residue) {
@@ -682,6 +722,20 @@ function closesIn(iso) {
   return `closes in ${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
+// Cross-reference: which screened, followed whales (CANDIDATE/WATCH -- the
+// same "Followed whales" default as the Live buys tab) have a fill on THIS
+// exact market. Deliberately not limited to a tight recent window the way the
+// live tape is -- whale fills are sparse per single market, so a hard cutoff
+// would show "nothing" almost always. Recency is surfaced via the timestamp
+// on each row instead of hidden behind a cutoff.
+function whaleBetsOn(condition) {
+  if (!condition) return [];
+  return state.trades
+    .filter((t) => t.condition === condition
+      && (t.verdict === 'CANDIDATE' || t.verdict === 'WATCH'))
+    .sort((a, b) => b.ts - a.ts);
+}
+
 function renderMarketsSoon() {
   const list = $('#soon-list');
   const empty = $('#soon-empty');
@@ -719,6 +773,7 @@ function renderMarketsSoon() {
     const who = el('div', 'who');
     who.appendChild(marketLink(m.title, m.slug));
     if (m.neg_risk) who.appendChild(el('span', 'tag plain', 'multi-outcome'));
+    who.appendChild(copyMarketBtn(m.title));
     li.appendChild(who);
 
     const right = el('div');
@@ -738,6 +793,38 @@ function renderMarketsSoon() {
     const mk = el('div', 'mkt');
     mk.textContent = `${closesIn(m.end_date)} · liquidity ${money(m.liquidity)}`;
     li.appendChild(mk);
+
+    // the actual question this tab exists to answer: is a whale already on
+    // this closing-soon market, and if so, which side
+    const bets = whaleBetsOn(m.condition);
+    if (bets.length) {
+      const wb = el('div', 'whalebets');
+      wb.appendChild(el('div', 'wblabel',
+        `🐳 ${bets.length} followed whale${bets.length === 1 ? '' : 's'} betting here`));
+      for (const t of bets.slice(0, 4)) {
+        const row = el('div', 'wbrow');
+        row.appendChild(el('b', 'wbname', displayName(t.name, t.wallet)));
+        row.appendChild(document.createTextNode(` ${t.side === 'BUY' ? 'bought' : 'sold'} `));
+        row.appendChild(el('b', null, t.outcome || '?'));
+        row.appendChild(document.createTextNode(
+          ` at ${(t.price * 100).toFixed(0)}¢ (${money(t.usd)}) · ${ago(t.ts)} ago`));
+        wb.appendChild(row);
+      }
+      if (bets.length > 4) wb.appendChild(el('div', 'wbrow mut', `+${bets.length - 4} more`));
+
+      const top = bets[0];
+      if (top.price > 0 && top.price < 1) {
+        wb.appendChild(copyButton({
+          wallet: top.wallet, name: top.name, verdict: top.verdict,
+          title: top.title, slug: top.slug, outcome: top.outcome,
+          price: top.price, stake: Number($('#t-stake')?.value) || 25,
+          condition: top.condition,
+        }));
+      }
+      li.appendChild(wb);
+    } else {
+      li.appendChild(el('div', 'wbempty', 'No followed whale has bet on this one recently.'));
+    }
 
     frag.appendChild(li);
   }
@@ -1244,7 +1331,12 @@ document.addEventListener('keydown', (e) => {
 /* ───────────────────────────── loops ────────────────────────────────── */
 
 setInterval(() => {
-  if (state.dirty && state.view === 'trades') { state.dirty = false; renderTrades(); }
+  if (!state.dirty) return;
+  state.dirty = false;
+  if (state.view === 'trades') renderTrades();
+  // 'soon' also depends on state.trades (whale-bets cross-reference), so a
+  // fresh whale fill should refresh it too, not just the 20s markets_soon poll
+  if (state.view === 'soon') renderMarketsSoon();
 }, RENDER_MS);
 
 setInterval(() => {

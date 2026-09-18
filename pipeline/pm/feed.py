@@ -38,6 +38,10 @@ FEED_VERDICTS = {"CANDIDATE", "WATCH", "FRAGILE"}
 MAX_TRADES = 500          # rows kept in the committed JSON
 PER_WALLET = 25           # recent fills pulled per wallet
 
+# Batch size for the condition_id -> endDate lookup below. Chunked well under
+# Gamma's own 100-row page cap (see api.py) to keep each request URL short.
+_END_DATE_BATCH = 50
+
 # Same classification the frontend uses, kept in one place server-side so a
 # whale's "trades mostly crypto/sports/..." tag agrees with what the trades
 # feed shows for that same wallet -- two independent implementations of this
@@ -79,6 +83,40 @@ def _recent_trades(wallet: str, limit: int = PER_WALLET) -> list[dict]:
         print(f"  ! trades {wallet}: {e}", file=sys.stderr)
         return []
     return rows if isinstance(rows, list) else (rows.get("data") or [])
+
+
+def _end_dates(conditions: set[str], *, log) -> dict[str, str]:
+    """condition_id -> endDate (ISO) for every market referenced in the feed,
+    whether it is still open or already resolved.
+
+    Verified live 2026-09-18: filtering /markets/keyset by condition_ids with
+    closed=false (or omitted) silently drops a market the instant it
+    resolves -- a 5-minute crypto market queried moments after settling came
+    back empty, even filtered on its exact condition_id. closed=true on the
+    same id returns it fine, endDate intact. Same trap markets.py documents
+    for the closing-soon buckets, hitting a different query shape, so this
+    asks both states and merges rather than assuming one covers both.
+
+    Also verified live: /markets/keyset takes condition_ids as a REPEATED
+    query param (?condition_ids=a&condition_ids=b) -- a comma-joined single
+    value silently matches nothing.
+    """
+    out: dict[str, str] = {}
+    ids = sorted(conditions)
+    for closed_state in (False, True):
+        for i in range(0, len(ids), _END_DATE_BATCH):
+            chunk = ids[i:i + _END_DATE_BATCH]
+            try:
+                rows = api.markets_keyset(limit=100, closed=closed_state,
+                                          max_pages=1, condition_ids=chunk)
+            except api.PolymarketError as e:
+                log(f"  ! feed end-dates (closed={closed_state}) batch: {e}")
+                continue
+            for m in rows:
+                cid = m.get("conditionId")
+                if cid:
+                    out[cid] = m.get("endDate") or ""
+    return out
 
 
 def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[str, Any], dict[str, dict]]:
@@ -143,6 +181,13 @@ def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[
         if len(uniq) >= MAX_TRADES:
             break
 
+    # so the browser can show "closes in Xh" on each trade without a live
+    # per-trade lookup -- one batched pass here instead
+    conditions = {t["condition"] for t in uniq if t["condition"]}
+    end_dates = _end_dates(conditions, log=log)
+    for t in uniq:
+        t["end_date"] = end_dates.get(t["condition"], "")
+
     profiles: dict[str, dict] = {}
     for wallet, counter in cats.items():
         total = sum(counter.values())
@@ -158,7 +203,7 @@ def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[
 
     newest = uniq[0]["ts"] if uniq else 0
     log(f"  feed: {len(uniq)} trades from {len({t['wallet'] for t in uniq})} whales, "
-        f"{len(profiles)} category-tagged")
+        f"{len(profiles)} category-tagged, {len(end_dates)}/{len(conditions)} end-dates resolved")
     feed = {
         "trades": uniq,
         "whales": len(by_wallet),

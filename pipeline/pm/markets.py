@@ -105,6 +105,10 @@ def _fetch_window(lo: str, hi: str, *, limit: int, log) -> list[dict]:
             "slug": m.get("slug") or "",
             "title": m.get("question") or "",
             "end_date": m.get("endDate") or "",
+            # lets the browser cross-reference this market against the whale
+            # trade feed (same condition_id on both), to show "who's betting
+            # on this one" right on the closing-soon card
+            "condition": m.get("conditionId") or "",
             "volume": float(m.get("volumeNum") or 0),
             "liquidity": float(m.get("liquidityNum") or 0),
             "outcomes": outcomes,
