@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
-<meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and a warning the moment they get out.">
-<link rel="stylesheet" href="style.css?v=20260919c">
+<meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
+<link rel="stylesheet" href="style.css?v=20260919d">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -205,10 +205,11 @@
 <!-- ───────────────────────────── MY COPIES ───────────────────────────── -->
 <section id="view-mine" class="view" hidden>
   <div class="callout warn">
-    <b>Positions you've copied.</b> Saved in this browser only — nothing is sent
-    anywhere, and no trade is ever placed for you. Each one is checked directly
-    against Polymarket every few seconds, so when <b>they</b> get out, this page
-    tells you loudly — usually within seconds, not the next board refresh. It
+    <b>Positions you've copied.</b> Your notebook is saved in this browser only. Public whale and market IDs are
+    queried at Polymarket; no trade is ever placed for you. Each one is checked directly
+    against Polymarket every 30 seconds. API responses can be cached for five
+    minutes, and saved snapshots may be much older. Exit alerts are delayed
+    observations, not instant execution signals. Keep this page open for checks and alerts. It
     does not tell you that getting out is the right move — see
     <a href="#" id="mine-method-link">how this works</a>.
   </div>
@@ -227,7 +228,7 @@
   <p id="mine-empty" class="empty">
     You haven't copied anything yet.<br>
     Go to <b>Live buys</b> or <b>What they hold</b> and press <b>⚡ Copy this</b> on a
-    bet you've taken. This page will then watch the whale for you, live.
+    bet you've taken. This page will then check the whale’s position for you, subject to API delays.
   </p>
 </section>
 
@@ -263,6 +264,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260919c" type="module"></script>
+<script src="app.js?v=20260919d" type="module"></script>
 </body>
 </html>

@@ -221,6 +221,8 @@ def score_wallet(stats: dict, points: list[dict], *, now_ts: int) -> dict:
     days_idle = int((now_ts - last_ts) / 86400) if last_ts else None
 
     flags: list[str] = []
+    if position_pnl <= 0:
+        flags.append("NON-PROFITABLE: lifetime position PnL is zero or negative")
     degenerate = dd["move_days"] < MIN_CURVE_MOVES
     if degenerate:
         flags.append(
@@ -310,7 +312,7 @@ def _verdict(flags: list[str], rankable: bool, net_dd: float | None) -> str:
     if not rankable:
         return "INSUFFICIENT"
     blocking = [f for f in flags
-                if f.startswith(("ONE-BET", "UNCOPYABLE", "MARKET-MAKER", "DORMANT",
+                if f.startswith(("NON-PROFITABLE", "ONE-BET", "UNCOPYABLE", "MARKET-MAKER", "DORMANT",
                                  "TOO FAST TO FOLLOW"))]
     if blocking:
         return "NOT COPYABLE"

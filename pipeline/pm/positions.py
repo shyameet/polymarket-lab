@@ -95,7 +95,11 @@ def _normalize(p: dict, card: dict, status: str) -> dict:
         "avg_price": round(avg_price, 4),
         "current_price": round(current_price, 4),
         "size": round(size, 4),
-        "cost_usd": round(float(p.get("total_cost_usdc") or p.get("entry_cost_usdc") or 0), 2),
+        # Closed entry_cost_usdc collapses to zero; recover lifetime basis
+        # from total_size * avg_price (see api.user_positions docstring).
+        "cost_usd": round(float(p.get("total_cost_usdc") or
+                                float(p.get("total_size") or 0) * avg_price or
+                                p.get("entry_cost_usdc") or 0), 2),
         "value_usd": round(float(p.get("current_value") or 0), 2),
         "realized_pnl": round(float(p.get("realized_pnl") or 0), 2),
         "unrealized_pnl": round(float(p.get("unrealized_pnl") or 0), 2),

@@ -1,0 +1,22 @@
+name: Regression checks
+on:
+  push:
+    paths: ['docs/app.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
+  pull_request:
+    paths: ['docs/app.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check docs/app.js
+      - run: node --test tests/tracking.test.cjs
+      - run: python -m unittest discover -s tests -p 'test_*.py'

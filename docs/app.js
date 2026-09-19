@@ -27,6 +27,10 @@ const RENDER_MS = 2200;
 const MAX_ROWS = 100;
 const DIRECT_MAX_FAILS = 3;
 const COPIES_KEY = 'myCopies.v1';
+const POSITION_MAX_AGE_MS = 6 * 60_000;
+// Only text escaped here may be interpolated into presentation HTML.
+const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g,
+  (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
 const $ = (s) => document.querySelector(s);
 const el = (t, c, txt) => {
@@ -313,6 +317,8 @@ function connect() {
 }
 
 function onWsDead() {
+  setSource(state.snapshotMeta ? 'snapshot' : 'down',
+    state.snapshotMeta ? 'Saved data · reconnecting' : 'Disconnected · reconnecting');
   state.directFails += 1;
   const relay = relayUrl();
   if (!relay && state.directFails >= DIRECT_MAX_FAILS) {
@@ -343,7 +349,10 @@ async function loadWhales() {
       fetch('data/whales.json', { cache: 'no-cache' }).then((r) => r.json()),
       fetch('data/meta.json', { cache: 'no-cache' }).then((r) => r.json()).catch(() => null),
     ]);
-    state.whales = Array.isArray(w) ? w : [];
+    if (!Array.isArray(w)) throw new Error('Invalid wallet snapshot');
+    // Older snapshots can carry the pre-fix WATCH verdict for losing wallets.
+    state.whales = w.map((c) => c.position_pnl <= 0 && c.verdict !== 'INSUFFICIENT'
+      ? { ...c, verdict: 'NOT COPYABLE' } : c);
     state.byWallet = new Map(state.whales.map((c) => [(c.wallet || '').toLowerCase(), c]));
     state.meta = m;
     renderBoard();
@@ -377,7 +386,13 @@ async function loadPositions() {
 /* ───────────────────────── my copies (localStorage) ─────────────────── */
 
 function loadCopies() {
-  try { state.copies = JSON.parse(lsGet(COPIES_KEY, '[]')) || []; }
+  try {
+    const saved = JSON.parse(lsGet(COPIES_KEY, '[]'));
+    state.copies = Array.isArray(saved) ? saved.filter((c) => c && typeof c.key === 'string'
+      && typeof c.wallet === 'string' && Number.isFinite(c.entryPrice)
+      && c.entryPrice > 0 && c.entryPrice < 1 && Number.isFinite(c.stake) && c.stake > 0)
+      .map((c) => ({ ...c, shares: c.stake / c.entryPrice, live: null, checkFailed: false })) : [];
+  }
   catch { state.copies = []; }
 }
 function saveCopies() {
@@ -386,6 +401,8 @@ function saveCopies() {
 }
 
 function addCopy({ wallet, name, verdict, title, slug, outcome, price, stake, condition }) {
+  if (!Number.isFinite(price) || price <= 0 || price >= 1
+      || !Number.isFinite(stake) || stake <= 0) return false;
   const key = posKey(wallet, slug, title, outcome, condition);
   if (state.copies.some((c) => c.key === key)) return false;   // already tracking
   state.copies.push({
@@ -418,12 +435,14 @@ function migrateCopies() {
   let changed = false;
   for (const c of state.copies) {
     if (c.condition) continue;
-    const matches = (x) => x.wallet === c.wallet && x.condition
-      && (x.slug === c.slug || x.title === c.title) && (x.outcome || '') === (c.outcome || '');
-    const hit = state.trades.find(matches)
-      || state.positions.open.find(matches)
-      || state.positions.recently_closed.find(matches);
-    if (hit) {
+    // A title (or two empty slugs) cannot establish market identity. Only
+    // recover a legacy key from a nonempty slug with one unique condition.
+    const matches = (x) => x.wallet === c.wallet && x.condition && c.slug
+      && x.slug === c.slug && (x.outcome || '') === (c.outcome || '');
+    const hits = [...state.trades, ...state.positions.open,
+      ...state.positions.recently_closed].filter(matches);
+    const hit = hits[0];
+    if (hit && new Set(hits.map((x) => x.condition)).size === 1) {
       c.condition = hit.condition;
       c.key = posKey(c.wallet, c.slug, c.title, c.outcome, c.condition);
       changed = true;
@@ -447,11 +466,23 @@ function migrateCopies() {
  * that wallet + that market. CORS is open (verified: access-control-allow-
  * origin: *), no server cap applies because we ask for one specific position,
  * not "give me your top N". This bypasses the committed-JSON staleness
- * entirely for anything you're actively tracking.
+ * for tracked copies, but REST itself is still cached for up to five minutes.
  */
 const POLY_DATA = 'https://data-api.polymarket.com/v2';
-const COPY_POLL_MS = 5000;   // as close to "every second" as is polite to an
-                              // unauthenticated public API for a handful of rows
+const COPY_POLL_MS = 30_000; // REST may be cached for five minutes; polling is not a live fill feed.
+let copiesPolling = false;
+
+async function positionRows(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Positions HTTP ${response.status}`);
+    const body = await response.json();
+    if (!Array.isArray(body?.data)) throw new Error('Invalid positions response');
+    return body.data;
+  } finally { clearTimeout(timer); }
+}
 
 async function liveCopyLookup(wallet, condition, outcome) {
   // Omitting status defaults to OPEN only server-side (verified) -- a closed
@@ -467,14 +498,15 @@ async function liveCopyLookup(wallet, condition, outcome) {
   // unfiltered check would have reported the Yes copy as "still in", which is
   // worse than the original blank-out bug -- confidently wrong instead of
   // honestly unknown.
-  const base = `${POLY_DATA}/positions?user=${wallet}&condition=${condition}`;
+  const base = `${POLY_DATA}/positions?${new URLSearchParams({ user: wallet, condition })}`;
   try {
-    const open = await fetch(`${base}&status=OPEN`).then((r) => r.json());
-    const openMatch = (open?.data || []).filter((r) => (r.outcome || '') === (outcome || ''));
+    const open = await positionRows(`${base}&status=OPEN`);
+    const openMatch = open.filter((r) => (r.outcome || '') === (outcome || ''));
     if (openMatch.length) return { state: 'in', rows: openMatch, checkedAt: Date.now() };
 
-    const closed = await fetch(`${base}&status=CLOSED`).then((r) => r.json());
-    const closedMatch = (closed?.data || []).filter((r) => (r.outcome || '') === (outcome || ''));
+    const closed = await positionRows(`${base}&status=CLOSED`);
+    const closedMatch = closed.filter((r) => (r.outcome || '') === (outcome || ''));
+    closedMatch.sort((a, b) => Number(b.last_event_at || 0) - Number(a.last_event_at || 0));
     if (closedMatch.length) return { state: 'exited', rows: closedMatch, checkedAt: Date.now() };
 
     return { state: 'unknown', rows: [], checkedAt: Date.now() };
@@ -484,24 +516,38 @@ async function liveCopyLookup(wallet, condition, outcome) {
 }
 
 async function pollAllCopies() {
-  const targets = state.copies.filter((c) => c.condition);
-  await Promise.all(targets.map(async (c) => {
-    const result = await liveCopyLookup(c.wallet, c.condition, c.outcome);
-    if (result) c.live = result;   // null (failed fetch) leaves the last-known value
-  }));
-  checkCopies();
+  if (copiesPolling) return;
+  copiesPolling = true;
+  try {
+    const targets = state.copies.filter((c) => c.condition);
+    // Limit concurrent requests and prevent overlapping timer batches.
+    await Promise.all(Array.from({ length: Math.min(4, targets.length) }, async () => {
+      while (targets.length) {
+        const c = targets.shift();
+        const result = await liveCopyLookup(c.wallet, c.condition, c.outcome);
+        c.checkFailed = !result;
+        if (result) c.live = result;
+      }
+    }));
+    checkCopies();
+  } finally { copiesPolling = false; }
 }
 
 /** Match one copy against what we know. Live poll result wins when we have
  * one (exact, un-capped); the committed board is the fallback for copies
  * saved before `condition` was tracked, or while the first poll is in flight. */
 function copyStatus(c) {
+  if (c.checkFailed) return { state: 'stale', checkedAt: c.live?.checkedAt };
   if (c.live) {
+    if (Date.now() - c.live.checkedAt > POSITION_MAX_AGE_MS) {
+      return { state: 'stale', checkedAt: c.live.checkedAt };
+    }
     const row = c.live.rows.find((r) => (r.outcome || '') === (c.outcome || '')) || c.live.rows[0];
     if (c.live.state === 'in') {
       return { state: 'in', price: row?.current_price, whalePos: row, checkedAt: c.live.checkedAt };
     }
     if (c.live.state === 'exited') {
+      if (!(Number(row?.last_event_at) >= c.addedAt)) return { state: 'unknown', checkedAt: c.live.checkedAt };
       return {
         state: 'exited', exitedAt: row?.last_event_at, whalePos: row,
         checkedAt: c.live.checkedAt,
@@ -512,11 +558,14 @@ function copyStatus(c) {
     return { state: 'unknown', checkedAt: c.live.checkedAt };
   }
 
+  if (!c.condition) return { state: 'unknown' };
+  const snapshotAt = Number(state.posMeta?.generated_at || 0) * 1000;
+  if (!snapshotAt || Date.now() - snapshotAt > POSITION_MAX_AGE_MS) return { state: 'stale' };
   const openHit = state.positions.open.find((p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
   if (openHit) return { state: 'in', price: openHit.current_price, whalePos: openHit };
   const closedHit = state.positions.recently_closed.find(
     (p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
-  if (closedHit) return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
+  if (closedHit && Number(closedHit.last_event_at) >= c.addedAt) return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
   return { state: 'unknown' };
 }
 
@@ -527,7 +576,7 @@ function checkCopies() {
     if (st.state === 'exited') {
       alerts += 1;
       if ($('#mine-notify')?.checked && !state.notified.has(c.key)
-          && Notification?.permission === 'granted') {
+          && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         state.notified.add(c.key);
         // Actionable, not just a fact: what you put in, at what price, and
         // where to go decide -- rather than guess a live P&L number here that
@@ -756,7 +805,7 @@ function renderPositions() {
 
     const says = el('div', 'says');
     says.innerHTML = p.outcome
-      ? `Backing <b>${p.outcome}</b> — bought in at <b>${((p.avg_price || 0) * 100).toFixed(0)}¢</b>`
+      ? `Backing <b>${escapeHTML(p.outcome)}</b> — bought in at <b>${((p.avg_price || 0) * 100).toFixed(0)}¢</b>`
         + (p._open && p.current_price
           ? `, now <b>${(p.current_price * 100).toFixed(0)}¢</b>` : '')
       : 'Multi-market position';
@@ -894,8 +943,8 @@ function renderMarketsSoon() {
 
     const says = el('div', 'says');
     if (m.outcomes?.length === 2 && m.prices?.length === 2) {
-      says.innerHTML = `<b>${m.outcomes[0]}</b> ${(m.prices[0] * 100).toFixed(0)}¢ · `
-        + `<b>${m.outcomes[1]}</b> ${(m.prices[1] * 100).toFixed(0)}¢`;
+      says.innerHTML = `<b>${escapeHTML(m.outcomes[0])}</b> ${(m.prices[0] * 100).toFixed(0)}¢ · `
+        + `<b>${escapeHTML(m.outcomes[1])}</b> ${(m.prices[1] * 100).toFixed(0)}¢`;
     } else {
       says.textContent = `${m.outcomes?.length || '?'} outcomes`;
     }
@@ -1082,17 +1131,14 @@ function renderMine() {
     if (c.verdict) who.appendChild(verdictPill(c.verdict));
     who.appendChild(el('span',
       `pstatus ${st.state === 'in' ? 'open' : 'exited'}`,
-      st.state === 'in' ? 'THEY\'RE STILL IN' : st.state === 'exited' ? 'THEY\'RE OUT' : 'CAN\'T SEE'));
-    // Prove it's actually live, not stuck -- this is the direct fix for
-    // "goes blank and I don't see the update": show exactly when it was last
-    // checked, and whether that check was a live per-position poll (fast,
-    // un-capped) or the slower board-wide snapshot.
+      st.state === 'in' ? 'THEY\'RE STILL IN' : st.state === 'exited' ? 'THEY\'RE OUT' : st.state === 'stale' ? 'DATA UNAVAILABLE / OLD' : 'CAN\'T SEE'));
+    // Request age is not market-data age: REST can still be cached.
     if (st.checkedAt) {
       const liveTag = el('span', 'tag plain',
-        `checked ${Math.max(1, Math.round((Date.now() - st.checkedAt) / 1000))}s ago`);
+        `API checked ${Math.max(1, Math.round((Date.now() - st.checkedAt) / 1000))}s ago`);
       who.appendChild(liveTag);
     } else if (!c.condition) {
-      who.appendChild(el('span', 'tag plain', 'older copy — re-add for live tracking'));
+      who.appendChild(el('span', 'tag plain', 'older copy — market identity unconfirmed'));
     }
     li.appendChild(who);
 
@@ -1102,7 +1148,7 @@ function renderMine() {
     if (nowPrice != null && c.entryPrice > 0) {
       const myPnl = c.shares * (nowPrice - c.entryPrice);
       right.appendChild(el('div', `headline-num ${sign(myPnl)}`, money(myPnl)));
-      right.appendChild(el('div', 'headline-sub', 'your paper P&L'));
+      right.appendChild(el('div', 'headline-sub', 'estimated P&L · before fees / slippage'));
     } else {
       right.appendChild(el('div', 'headline-num mut', money(c.stake)));
       right.appendChild(el('div', 'headline-sub', 'you staked'));
@@ -1110,7 +1156,7 @@ function renderMine() {
     li.appendChild(right);
 
     const says = el('div', 'says');
-    says.innerHTML = `You backed <b>${c.outcome || '?'}</b> at `
+    says.innerHTML = `You backed <b>${escapeHTML(c.outcome || '?')}</b> at `
       + `<b>${((c.entryPrice || 0) * 100).toFixed(0)}¢</b> with `
       + `<b>${money(c.stake)}</b> (${(c.shares || 0).toFixed(c.shares < 10 ? 1 : 0)} shares)`
       + (nowPrice != null ? ` · now <b>${(nowPrice * 100).toFixed(0)}¢</b>` : '');
@@ -1120,12 +1166,15 @@ function renderMine() {
     mk.appendChild(marketLink(c.title, c.slug));
     li.appendChild(mk);
 
+    if (st.state === 'stale') {
+      li.appendChild(el('div', 'why', 'Position data is old or the latest request failed. Holdings and P&L cannot be confirmed. REST responses can also lag by up to five minutes.'));
+    }
     if (st.state === 'unknown') {
       li.appendChild(el('div', 'why', st.checkedAt
-        ? "Just checked Polymarket directly for this exact position and found nothing open or "
-          + 'recently closed — genuinely unclear, not the same as them having got out.'
+        ? "The last cached API check did not confirm an open position or an exit after you saved this copy. "
+          + 'This does not establish that the whale has exited.'
         : "Not yet in the whale's currently-tracked holdings or their last 7 days of exits. A "
-          + 'live check runs every few seconds and will update this shortly.'));
+          + 'cached API check runs every 30 seconds; availability and freshness are not guaranteed.'));
     }
 
     const actions = el('div', 'actions');
@@ -1148,7 +1197,7 @@ function renderMine() {
 /* ──────────────────────── who to follow (board) ─────────────────────── */
 
 const ORDER = { CANDIDATE: 0, WATCH: 1, FRAGILE: 2, 'NOT COPYABLE': 3, INSUFFICIENT: 4 };
-const isGood = (c) => c.verdict === 'CANDIDATE' || c.verdict === 'WATCH';
+const isGood = (c) => c.position_pnl > 0 && (c.verdict === 'CANDIDATE' || c.verdict === 'WATCH');
 
 function renderBoard() {
   const sortKey = $('#w-sort').value;
@@ -1230,8 +1279,8 @@ function renderBoard() {
       d.appendChild(el('div', `fv ${cls || ''}`, v));
       facts.appendChild(d);
     };
-    f('Worst drop', money(c.max_dd_usd), 'neg');
-    f('Profit per $1 risked', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(1)}`);
+    f('Worst daily-sampled drop', money(c.max_dd_usd), 'neg');
+    f('Profit / historical drop', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(1)}`);
     f('Winning months', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
     f('Bets placed', (c.trade_count || 0).toLocaleString());
     if (c.lb_day_pnl != null && !showWindow) f('Today', money(c.lb_day_pnl), sign(c.lb_day_pnl));
@@ -1295,8 +1344,8 @@ function openDrawer(c) {
     grid.appendChild(d);
   };
   cell('Total profit', money(c.position_pnl), sign(c.position_pnl));
-  cell('Worst drop', money(c.max_dd_usd), 'neg');
-  cell('Profit per $1 risked', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(2)}`);
+  cell('Worst daily-sampled drop', money(c.max_dd_usd), 'neg');
+  cell('Profit / historical drop', c.net_dd == null ? '—' : `$${c.net_dd.toFixed(2)}`);
   cell('Winning months', `${(c.pct_positive_months ?? 0).toFixed(0)}%`);
   cell('Bets placed', (c.trade_count || 0).toLocaleString());
   cell('Biggest single win', money(c.biggest_win));
@@ -1322,14 +1371,14 @@ function openDrawer(c) {
     for (const p of openPos.slice(0, 6)) {
       const row = el('div');
       row.style.cssText = 'font-size:15px;color:var(--dim);margin-bottom:7px;line-height:1.5';
-      row.innerHTML = `<span class="pstatus open">HOLDING</span> ${p.title || ''} — `
+      row.innerHTML = `<span class="pstatus open">HOLDING</span> ${escapeHTML(p.title || '')} — `
         + `in at ${((p.avg_price || 0) * 100).toFixed(0)}¢, ${money(p.unrealized_pnl)} on paper`;
       b.appendChild(row);
     }
     for (const p of closedPos.slice(0, 6)) {
       const row = el('div');
       row.style.cssText = 'font-size:15px;color:var(--dim);margin-bottom:7px;line-height:1.5';
-      row.innerHTML = `<span class="pstatus exited">GOT OUT</span> ${p.title || ''} — `
+      row.innerHTML = `<span class="pstatus exited">GOT OUT</span> ${escapeHTML(p.title || '')} — `
         + `banked ${money(p.realized_pnl)}, ${ago(p.last_event_at)} ago`;
       b.appendChild(row);
     }
@@ -1406,14 +1455,14 @@ function renderMethod() {
      top of it does not predict tomorrow. Of <b>${state.whales.length}</b> traders
      checked here, <b>${failed}</b> are ruled out.`);
   if (richest) {
-    p(`The current top earner is <b>${displayName(richest.name, richest.wallet)}</b> at
+    p(`The current top earner is <b>${escapeHTML(displayName(richest.name, richest.wallet))}</b> at
        <b>${money(richest.position_pnl)}</b> — but <b>${pct(richest.concentration)}</b> of
        that came from a single bet, and only
        <b>${(richest.pct_positive_months ?? 0).toFixed(0)}%</b> of their months were
        profitable. That is a lottery ticket, not a method.`);
   }
   if (mm) {
-    p(`<b>${displayName(mm.name, mm.wallet)}</b> looks steadier —
+    p(`<b>${escapeHTML(displayName(mm.name, mm.wallet))}</b> looks steadier —
        <b>${(mm.pct_positive_months ?? 0).toFixed(0)}%</b> winning months. But
        <b>${pct(mm.program_share)}</b> of that profit is rebates for providing liquidity,
        not bets you could copy. They are a market maker: they earn the spread you would
@@ -1422,7 +1471,7 @@ function renderMethod() {
 
   h('What "worth following" actually means');
   const ul = el('ul');
-  [['Profit per $1 risked', 'how much they made for every dollar their account fell '
+  [['Profit / historical drop', 'how much they made for every dollar their account fell '
     + 'from its peak. Rewards steadiness, not size.'],
   ['% from one bet', 'if most of the profit came from a single wager, the record is '
     + 'one lucky call rather than a repeatable process.'],
@@ -1433,6 +1482,13 @@ function renderMethod() {
       const li = el('li'); li.innerHTML = `<b>${k}</b> — ${v}`; ul.appendChild(li);
     });
   m.appendChild(ul);
+
+  h('Using this for prop-firm research');
+  p(`Historical wallet profit is not your account equity or a tested strategy for futures,
+     forex or CFDs. These drawdowns use daily samples and can miss intraday losses.
+     Profit divided by historical drawdown is not a trade’s reward-to-risk ratio.
+     Validate your own entries, stops, costs and exits in forward testing, and track
+     your firm’s daily loss, overall drawdown and reset-time rules separately.`);
 
   h('About copying exits');
   p(`<b>My copies</b> warns you when a whale leaves a position you took. That warning is
@@ -1509,7 +1565,7 @@ $('#mine-clear').addEventListener('click', () => {
   }
 });
 $('#mine-notify').addEventListener('change', (e) => {
-  if (e.target.checked && Notification?.permission === 'default') Notification.requestPermission();
+  if (e.target.checked && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
 });
 $('#mine-method-link').addEventListener('click', (e) => {
   e.preventDefault();
