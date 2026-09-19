@@ -46,9 +46,11 @@ from typing import Any
 
 from . import api
 from .feed import FEED_VERDICTS, categorize
+from .insights import topic_profile
 
 MAX_OPEN_PER_WALLET = 12
 MAX_CLOSED_PER_WALLET = 8
+TOPIC_CLOSED_SAMPLE = 200
 
 # Positions below this are dust and are dropped. This is a readability fix as
 # much as a payload one: a whale holding 400 sub-$50 scraps buries the three
@@ -70,10 +72,10 @@ def _wallet_positions(wallet: str) -> tuple[list[dict], list[dict]]:
         print(f"  ! positions(open) {wallet}: {e}", file=sys.stderr)
         open_ = []
     try:
-        closed = api.user_positions(wallet, cap=MAX_CLOSED_PER_WALLET, status="CLOSED")
+        closed = api.user_positions(wallet, cap=TOPIC_CLOSED_SAMPLE, status="CLOSED")
     except api.PolymarketError as e:
         print(f"  ! positions(closed) {wallet}: {e}", file=sys.stderr)
-        closed = []
+        closed = None
     return open_, closed
 
 
@@ -119,16 +121,24 @@ def build_positions(cards: list[dict], *, workers: int = 8, now_ts: int,
 
     open_out: list[dict] = []
     closed_out: list[dict] = []
+    profiles = {}
+    failed = 0
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_wallet_positions, c["wallet"]): c for c in whales}
         for fut in cf.as_completed(futs):
             card = futs[fut]
             opened, closed = fut.result()
+            if closed is None:
+                failed += 1
+            else:
+                normalized = [_normalize(p, card, "CLOSED") for p in closed]
+                profiles[card['wallet']] = topic_profile(normalized, capped=len(closed) >= TOPIC_CLOSED_SAMPLE)
             for p in opened:
                 rec = _normalize(p, card, "OPEN")
                 if max(abs(rec["value_usd"]), abs(rec["cost_usd"])) >= MIN_POSITION_USD:
                     open_out.append(rec)
-            for p in closed:
+            recent = sorted(closed or [], key=lambda p: -(p.get('last_event_at') or 0))
+            for p in recent[:MAX_CLOSED_PER_WALLET]:
                 rec = _normalize(p, card, "CLOSED")
                 last = rec.get("last_event_at")
                 if not last or (now_ts - int(last)) > RECENT_EXIT_WINDOW_S:
@@ -145,6 +155,9 @@ def build_positions(cards: list[dict], *, workers: int = 8, now_ts: int,
         "generated_at": now_ts,
         "open": open_out,
         "recently_closed": closed_out,
+        "topic_profiles": profiles,
+        "coverage": {"wallets_requested": len(whales), "closed_failed": failed,
+                     "closed_sample_cap": TOPIC_CLOSED_SAMPLE},
         "note": ("OPEN/CLOSED is a fact from Polymarket's own position ledger, not "
                  "a signal we compute. 'Recently closed' means the whale exited that "
                  "token within the last 7 days -- it is what happened, not advice on "

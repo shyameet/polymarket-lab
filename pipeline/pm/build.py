@@ -25,6 +25,7 @@ from .crypto_flows import build_crypto_flows
 from .feed import build_feed
 from .markets import build_markets_soon
 from .positions import build_positions
+from .insights import build_insights
 from .score import score_wallet
 
 # Addresses that are protocol infrastructure, not traders. They surface in
@@ -311,6 +312,15 @@ def main() -> int:
     # read from Polymarket's own ledger rather than re-derived from fills.
     if not args.no_positions:
         positions = build_positions(ordered, workers=args.workers, now_ts=now_ts, log=log)
+        insight_path = os.path.join(args.out, 'whale_insights.json')
+        try:
+            with open(insight_path, encoding='utf-8') as f:
+                previous_insights = json.load(f)
+        except (OSError, ValueError):
+            previous_insights = None
+        insights = build_insights(positions, previous_insights)
+        _write(insight_path, insights)
+        positions.pop('topic_profiles', None)
         meta["positions_open"] = len(positions["open"])
         meta["positions_recently_closed"] = len(positions["recently_closed"])
         _write(os.path.join(args.out, "whale_positions.json"), positions)
