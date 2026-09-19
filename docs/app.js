@@ -55,7 +55,44 @@ const state = {
   hintShown: false, notified: new Set(),
   marketsSoon: null, marketsBucket: 'hours',
   cryptoFlows: null,
+  watchlist: new Set(), watchOnly: false, insights: null, research: null,
 };
+
+function loadWatchlist() {
+  try {
+    const saved = JSON.parse(lsGet('whaleWatchlist.v1', '[]'));
+    state.watchlist = new Set(Array.isArray(saved) ? saved.filter(w => typeof w === 'string'
+      && /^0x[a-fA-F0-9]{40}$/.test(w)).map(w => w.toLowerCase()) : []);
+  } catch { state.watchlist = new Set(); }
+  state.watchOnly = lsGet('whaleWatchOnly.v1', 'false') === 'true';
+}
+const isWatched = wallet => state.watchlist.has((wallet || '').toLowerCase());
+function refreshWatchlist() {
+  const count = $('#watch-count');
+  if (count) count.textContent = `${state.watchlist.size} followed`;
+  renderBoard(); state.dirty = true;
+  if (state.view === 'positions') renderPositions();
+  if (state.view === 'soon') renderMarketsSoon();
+  state.research?.render();
+  document.querySelectorAll('button[data-watch-wallet]').forEach(b => {
+    const selected = isWatched(b.dataset.watchWallet);
+    b.textContent = selected ? '★ Following' : '☆ Follow';
+    b.setAttribute('aria-pressed', String(selected));
+  });
+}
+function watchButton(c) {
+  const wallet = (c.wallet || '').toLowerCase();
+  const button = el('button', 'btn small', isWatched(wallet) ? '★ Following' : '☆ Follow');
+  button.dataset.watchWallet = wallet;
+  button.setAttribute('aria-pressed', String(isWatched(wallet)));
+  button.setAttribute('aria-label', `Follow ${displayName(c.name, wallet)}`);
+  button.addEventListener('click', e => {
+    e.stopPropagation();
+    if (isWatched(wallet)) state.watchlist.delete(wallet); else state.watchlist.add(wallet);
+    lsSet('whaleWatchlist.v1', JSON.stringify([...state.watchlist])); refreshWatchlist();
+  });
+  return button;
+}
 
 /* ─────────────────────────── format helpers ─────────────────────────── */
 
@@ -239,6 +276,7 @@ function addTrade(raw, live) {
     outcome: raw.outcome || '', title: raw.title || '',
     slug: raw.slug || raw.eventSlug || '',
     condition: raw.condition || raw.conditionId || '',
+    asset: raw.asset || raw.asset_id || '',
     end_date: raw.end_date || '',
     category: raw.category || categorizeClient(raw.title, raw.slug),
     tx: raw.tx || raw.transactionHash || '',
@@ -264,6 +302,7 @@ function addTrade(raw, live) {
     state.trades.length = 2500;
   }
   state.dirty = true;
+  state.research?.observeTrade(t);
   return true;
 }
 
@@ -635,6 +674,7 @@ function visibleTrades() {
   const cutoff = Date.now() / 1000 - TRADE_VISIBLE_S;
   return state.trades
     .filter((t) => {
+      if (state.watchOnly && !isWatched(t.wallet)) return false;
       if (t.ts < cutoff) return false;
       if (t.usd < min) return false;
       if (state.tradeCategory && t.category !== state.tradeCategory) return false;
@@ -748,7 +788,8 @@ function renderTrades() {
 const FRESH_EXIT_S = 10 * 60;
 
 function renderPositions() {
-  const { open, recently_closed } = state.positions;
+  const open = state.positions.open.filter(p => !state.watchOnly || isWatched(p.wallet));
+  const recently_closed = state.positions.recently_closed.filter(p => !state.watchOnly || isWatched(p.wallet));
   const showOpen = state.posFilter !== 'closed';
   const showClosed = state.posFilter !== 'open';
   let rows = [
@@ -891,7 +932,7 @@ function closesIn(iso) {
 function whaleBetsOn(condition) {
   if (!condition) return [];
   return state.trades
-    .filter((t) => t.condition === condition
+    .filter((t) => (!state.watchOnly || isWatched(t.wallet)) && t.condition === condition
       && (t.verdict === 'CANDIDATE' || t.verdict === 'WATCH'))
     .sort((a, b) => b.ts - a.ts);
 }
@@ -1202,6 +1243,7 @@ const isGood = (c) => c.position_pnl > 0 && (c.verdict === 'CANDIDATE' || c.verd
 function renderBoard() {
   const sortKey = $('#w-sort').value;
   let rows = state.whales.filter((c) => {
+    if (state.watchOnly && !isWatched(c.wallet)) return false;
     if (state.verdict === 'good' && !isGood(c)) return false;
     if (state.verdict && state.verdict !== 'good' && c.verdict !== state.verdict) return false;
     if (state.category) {
@@ -1257,6 +1299,10 @@ function renderBoard() {
     nm.addEventListener('click', () => openDrawer(c));
     who.appendChild(nm);
     who.appendChild(verdictPill(c.verdict));
+    who.appendChild(watchButton(c));
+    for (const topic of state.insights?.profiles?.[c.wallet]?.topics || []) {
+      if (topic.specialist) who.appendChild(el('span', 'tag', `${CAT_LABEL[topic.category] || topic.category} specialist · sampled`));
+    }
     const cat = catOf(c);
     if (cat && CAT_LABEL[cat]) who.appendChild(el('span', 'tag', CAT_LABEL[cat]));
     if (c.discovered) who.appendChild(el('span', 'tag plain', 'off-leaderboard'));
@@ -1327,6 +1373,7 @@ function openDrawer(c) {
   const b = $('#drawer-body');
   b.textContent = '';
   b.appendChild(el('h2', 'dh', displayName(c.name, c.wallet)));
+  b.appendChild(watchButton(c));
   b.appendChild(el('p', 'dsub', c.wallet));
   b.appendChild(verdictPill(c.verdict));
   const cat = catOf(c);
@@ -1512,7 +1559,7 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research'];
 document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.segbtn').forEach((x) => x.classList.remove('active'));
   b.classList.add('active');
@@ -1523,7 +1570,20 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
   if (state.view === 'mine') { renderMine(); pollAllCopies(); }
   if (state.view === 'soon') renderMarketsSoon();
   if (state.view === 'flows') renderCryptoFlows();
+  if (state.view === 'research') state.research?.render();
 }));
+
+loadWatchlist();
+$('#watch-only').checked = state.watchOnly;
+$('#watch-count').textContent = `${state.watchlist.size} followed`;
+$('#watch-only').addEventListener('change', e => {
+  state.watchOnly = e.target.checked;
+  lsSet('whaleWatchOnly.v1', String(state.watchOnly)); refreshWatchlist();
+});
+import('./research.js?v=20260919e').then(({initResearch}) => {
+  state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
+    showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
+}).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
 
 const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
   const b = e.target.closest('.chip'); if (!b) return;

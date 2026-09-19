@@ -303,6 +303,19 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
 
 .pos{color:var(--green)}.neg{color:var(--red)}.mut{color:var(--faint)}
 
+.watchbar{max-width:var(--wrap);margin:12px auto;padding:0 24px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.watchbar label{cursor:pointer;color:var(--gold)}
+.research-grid{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr));gap:14px}
+.research-card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;overflow-wrap:anywhere}
+.research-card .who{display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0}
+.research-card .nm{max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.research-card p{margin:10px 0;line-height:1.5}
+.research-card .headline-num{margin-top:14px}
+.research-title{color:var(--fg)}
+#view-research h3{margin-top:30px;color:var(--gold)}
+#research-topic{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;max-width:100%}
+button[aria-pressed="true"]{border-color:var(--gold);color:var(--gold)}
+
 /* ── footer / method ────────────────────────────────────────────────── */
 .foot{max-width:var(--wrap);margin:0 auto;padding:14px 24px 60px;
   border-top:1px solid var(--line2)}

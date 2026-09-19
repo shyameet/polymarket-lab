@@ -43,6 +43,12 @@ class InsightsTests(unittest.TestCase):
         c = build_insights(snapshot(300, closed=[p]), a)
         self.assertEqual(c['events'], [])
 
+    def test_conflicting_open_and_closed_responses_do_not_confirm_exit(self):
+        a = build_insights(snapshot(100, [position()]))
+        closed = position(status='CLOSED'); closed['last_event_at'] = 200
+        b = build_insights(snapshot(200, [position()], [closed]), a)
+        self.assertEqual(b['events'], [])
+
     def test_opposite_outcomes_are_one_market_and_topics_use_their_own_pnl(self):
         rows = [dict(condition='same', category='weather', realized_pnl=10, cost_usd=20),
                 dict(condition='same', category='weather', realized_pnl=-12, cost_usd=20),

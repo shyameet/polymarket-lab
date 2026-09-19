@@ -9,8 +9,9 @@ Positions disappearing from the top-12 snapshot are NOT exits. Only explicit
 CLOSED records confirm exits. Quantity differences are net inventory changes,
 not proof of directional conviction (transfers/conversions can also move size).
 
-Holding spans start at our first OPEN observation, not the true entry. They are
-lower bounds; never label a whale a scalper or settlement holder from these.
+Holding spans start at our first OPEN observation, not the true entry. Gaps
+can conceal close/reopen cycles; never claim continuous holding or label a
+whale a scalper or settlement holder from these observations.
 """
 from __future__ import annotations
 
@@ -84,6 +85,7 @@ def build_insights(positions, previous=None):
     events = [e for e in previous.get('events', []) if now-number(e.get('observed_at')) <= 30*86400]
     spans = [s for s in previous.get('holding_spans', []) if now-number(s.get('at')) <= 90*86400]
     keys = {e['id'] for e in events}
+    open_keys = {position_key(p) for p in positions.get('open', [])}
     for p in positions.get('open', []) + positions.get('recently_closed', []):
         key = position_key(p)
         if not key:
@@ -103,6 +105,8 @@ def build_insights(positions, previous=None):
             observations[key] = {'wallet': p['wallet'], 'status': 'OPEN', 'size': size,
                                  'seen_at': now, 'first_seen': first}
         else:
+            if key in open_keys:
+                continue  # separately cached OPEN/CLOSED responses can disagree
             if not before or before.get('status') != 'OPEN':
                 continue
             exited_at = number(p.get('last_event_at'))
@@ -136,4 +140,4 @@ def build_insights(positions, previous=None):
             'events': sorted(events, key=lambda e: -e['observed_at'])[:1000],
             'observations': dict(sorted(observations.items(), key=lambda x: -x[1]['seen_at'])[:30000]),
             'holding_spans': sorted(spans, key=lambda s: -s['at'])[:5000],
-            'note': 'Closed-result sample, not lifetime topic equity. Holding spans are lower bounds from first observation. No inferred exits from disappearance.'}
+            'note': 'Closed-result sample, not lifetime topic equity. Observation spans do not establish continuous holding. No inferred exits from disappearance.'}

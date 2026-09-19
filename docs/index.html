@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260919d">
+<link rel="stylesheet" href="style.css?v=20260919e">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -52,12 +52,50 @@
 
 <nav class="seg" role="tablist">
   <button class="segbtn active" data-view="whales" role="tab">Who to follow</button>
+  <button class="segbtn" data-view="research" role="tab">Whale research</button>
   <button class="segbtn" data-view="soon" role="tab">Closing soon</button>
   <button class="segbtn" data-view="trades" role="tab">Live buys</button>
   <button class="segbtn" data-view="positions" role="tab">What they hold</button>
   <button class="segbtn" data-view="mine" role="tab">My copies<span id="mine-badge" class="badge" hidden>0</span></button>
   <button class="segbtn" data-view="flows" role="tab">Crypto flows</button>
 </nav>
+
+<div class="watchbar">
+  <label><input type="checkbox" id="watch-only"> Only whales I follow</label>
+  <span id="watch-count" class="tiny">0 followed</span>
+  <span class="tiny">Saved in this browser · filters boards, whale trades and holdings</span>
+</div>
+
+<section id="view-research" class="view" hidden>
+  <h2>Find specialists. Follow their changes.</h2>
+  <p class="hint" id="research-status">Loading research…</p>
+  <h3>Topic leaderboards</h3>
+  <p class="hint">Ranked by realized profit within the selected topic, among screened whales. Up to 200 closed positions per whale; this is a sample, not lifetime topic performance. Open losses are not included. Topic labels are inferred from market text.</p>
+  <div class="controls">
+    <label>Topic <select id="research-topic">
+      <option value="weather">Weather</option><option value="politics">Politics</option>
+      <option value="crypto">Crypto</option><option value="sports">Sports</option>
+      <option value="csgo">CS:GO</option><option value="valorant">Valorant</option>
+      <option value="esports">Other esports</option><option value="macro">Macro</option>
+      <option value="other">Other / unclassified</option>
+    </select></label>
+    <label><input type="checkbox" id="research-qualified" checked> Consistency screen only</label>
+  </div>
+  <details class="hint"><summary>How the screen and specialist badges work</summary>
+    At least 20 distinct closed markets, positive sampled profit, results across at least 3 closing months,
+    60% of those months positive, and no single market providing over 35% of gross winning profit.
+    A specialist also has at least 60% of sampled cost in this topic. These are screening rules, not proof of future skill.
+  </details>
+  <ul id="topic-board" class="research-grid"></ul>
+  <h3>Conviction tracker</h3>
+  <p class="hint">Net share changes between adjacent snapshots. Adds and reductions describe inventory, not intent; hedges and conversions can also change it. Exits require a confirmed closed position. Updates follow the snapshot schedule, not the live tape.</p>
+  <ul id="conviction-feed" class="research-grid"></ul>
+  <h3>Followability &amp; holding profiles</h3>
+  <p class="hint">Followability checks whether $25 can still be bought within 2¢ of the whale’s fill, one minute after this browser sees a fresh live buy. Only followed whales are sampled, at most once per whale every 5 minutes. Keep this page open. The score requires 10 measured checks; failed checks are reported separately. Displayed depth is not a guaranteed fill, and fees are excluded.</p>
+  <p class="hint">Observation spans are not exact holding times: gaps can hide close/reopen cycles. Quick trading and holding until settlement require entry and exit-reason history that the current snapshots cannot establish.</p>
+  <p id="followability-status" class="tiny"></p>
+  <ul id="whale-profiles" class="research-grid"></ul>
+</section>
 
 <!-- ───────────────────────── WHO TO FOLLOW ───────────────────────── -->
 <section id="view-whales" class="view">
@@ -264,6 +302,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260919d" type="module"></script>
+<script src="app.js?v=20260919e" type="module"></script>
 </body>
 </html>

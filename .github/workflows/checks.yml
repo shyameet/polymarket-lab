@@ -1,9 +1,9 @@
 name: Regression checks
 on:
   push:
-    paths: ['docs/app.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
+    paths: ['docs/*.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
   pull_request:
-    paths: ['docs/app.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
+    paths: ['docs/*.js', 'pipeline/**', 'tests/**', '.github/workflows/checks.yml']
 permissions:
   contents: read
 jobs:
@@ -18,5 +18,6 @@ jobs:
         with:
           node-version: '22'
       - run: node --check docs/app.js
-      - run: node --test tests/tracking.test.cjs
+      - run: node --check docs/research.js
+      - run: node --test tests/*.test.cjs
       - run: python -m unittest discover -s tests -p 'test_*.py'
