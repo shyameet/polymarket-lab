@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and a warning the moment they get out.">
-<link rel="stylesheet" href="style.css?v=20260918f">
+<link rel="stylesheet" href="style.css?v=20260919c">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -144,8 +144,21 @@
     </label>
     <button id="pause" class="btn">Pause</button>
   </div>
+  <div class="controls">
+    <div class="chips" id="t-cat-chips">
+      <button class="chip active" data-cat="">All topics</button>
+      <button class="chip" data-cat="politics">Politics</button>
+      <button class="chip" data-cat="weather">Weather</button>
+      <button class="chip" data-cat="csgo">CS:GO</button>
+      <button class="chip" data-cat="valorant">Valorant</button>
+      <button class="chip" data-cat="esports">Esports (other)</button>
+      <button class="chip" data-cat="sports">Sports</button>
+      <button class="chip" data-cat="crypto">Crypto</button>
+      <button class="chip" data-cat="macro">Macro</button>
+    </div>
+  </div>
 
-  <p class="hint">Each bet stays visible for 5 minutes, then drops off on its own —
+  <p class="hint">Each bet stays visible for 2 minutes, then drops off on its own —
     newest first. Tap a name for their full record, or the orange
     <b>⚡ Copy this</b> button to track that you took the same bet.</p>
 
@@ -167,6 +180,19 @@
       <button class="chip active" data-p="all">Everything</button>
       <button class="chip" data-p="open">Still holding</button>
       <button class="chip" data-p="closed">Just got out</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="chips" id="p-cat-chips">
+      <button class="chip active" data-cat="">All topics</button>
+      <button class="chip" data-cat="politics">Politics</button>
+      <button class="chip" data-cat="weather">Weather</button>
+      <button class="chip" data-cat="csgo">CS:GO</button>
+      <button class="chip" data-cat="valorant">Valorant</button>
+      <button class="chip" data-cat="esports">Esports (other)</button>
+      <button class="chip" data-cat="sports">Sports</button>
+      <button class="chip" data-cat="crypto">Crypto</button>
+      <button class="chip" data-cat="macro">Macro</button>
     </div>
   </div>
 
@@ -237,6 +263,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260918f" type="module"></script>
+<script src="app.js?v=20260919c" type="module"></script>
 </body>
 </html>

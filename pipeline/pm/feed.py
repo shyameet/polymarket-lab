@@ -46,8 +46,21 @@ _END_DATE_BATCH = 50
 # whale's "trades mostly crypto/sports/..." tag agrees with what the trades
 # feed shows for that same wallet -- two independent implementations of this
 # regex would drift.
+#
+# csgo/valorant/esports MUST be checked before "sports" -- a title like
+# "Counter-Strike: EYEBALLERS vs BBL (BO1)" contains "vs" and would otherwise
+# get swallowed by the generic sports pattern, which is exactly the "just
+# esports" bucket the owner asked to split out by name (requested explicitly:
+# politics, weather, csgo, valorant -- not lumped into one).
 _CAT_PATTERNS = [
     ("crypto", re.compile(r"up or down|bitcoin|ethereum|solana|\bbtc\b|\beth\b|crypto", re.I)),
+    ("csgo", re.compile(r"counter-strike|counter strike|\bcs2\b|\bcsgo\b", re.I)),
+    ("valorant", re.compile(r"valorant", re.I)),
+    ("esports", re.compile(r"league of legends|\blol\b|\bdota\b|overwatch|rocket league|"
+                           r"\besports?\b|logitech g|blast premier|\besl\b|rainbow six", re.I)),
+    ("weather", re.compile(r"highest temperature|lowest temperature|rainfall|snowfall|"
+                           r"hurricane|\bweather\b|°c\b|°f\b|degrees celsius|degrees fahrenheit",
+                           re.I)),
     ("sports", re.compile(r"\bvs\.?\b|win on 20|o/u|nba|nfl|mlb|ufc|atp|wta|premier league|"
                           r"match|\bfc\b", re.I)),
     ("macro", re.compile(r"fed|interest rate|cpi|inflation|gdp|recession|jobs", re.I)),
@@ -146,7 +159,8 @@ def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[
                 price = float(t.get("price") or 0)
                 title = t.get("title") or ""
                 slug = t.get("slug") or t.get("eventSlug") or ""
-                cats[wallet][categorize(title, slug)] += 1
+                category = categorize(title, slug)
+                cats[wallet][category] += 1
                 out.append({
                     "ts": int(ts),
                     "wallet": card["wallet"],
@@ -163,6 +177,10 @@ def build_feed(cards: list[dict], *, workers: int = 8, log=print) -> tuple[dict[
                     "outcome": t.get("outcome") or "",
                     "title": title,
                     "slug": slug,
+                    # lets the browser filter the live tape by topic (politics,
+                    # weather, csgo, valorant, ...) -- requested explicitly,
+                    # split out by name rather than lumped into "sports"
+                    "category": category,
                     # needed so the browser can poll THIS exact position live,
                     # bypassing the per-wallet cap on the committed positions file
                     "condition": t.get("conditionId") or "",

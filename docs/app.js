@@ -47,6 +47,7 @@ const state = {
   source: 'starting', via: 'direct', paused: false, dirty: true,
   stamps: [], directFails: 0, ws: null, backoff: 1000, pinger: null,
   view: 'whales', who: 'best', verdict: 'good', category: '', posFilter: 'all',
+  tradeCategory: '', posCategory: '',
   hintShown: false, notified: new Set(),
   marketsSoon: null, marketsBucket: 'hours',
   cryptoFlows: null,
@@ -88,6 +89,29 @@ const ago = (ts) => {
 };
 const isChurn = (t) =>
   /Up or Down|updown-\d+m/i.test(`${t.title || ''} ${t.slug || ''}`);
+
+// Mirrors pm/feed.py's categorize() exactly -- the server tags snapshot
+// trades with `category` already, but a trade arriving live over the
+// websocket never touches the pipeline, so it needs the same classification
+// done client-side or it would sit uncategorized (and unfilterable) until
+// the next snapshot refresh picks it up. Keep these two patterns in sync.
+const CAT_PATTERNS = [
+  ['crypto', /up or down|bitcoin|ethereum|solana|\bbtc\b|\beth\b|crypto/i],
+  ['csgo', /counter-strike|counter strike|\bcs2\b|\bcsgo\b/i],
+  ['valorant', /valorant/i],
+  ['esports', /league of legends|\blol\b|\bdota\b|overwatch|rocket league|\besports?\b|logitech g|blast premier|\besl\b|rainbow six/i],
+  ['weather', /highest temperature|lowest temperature|rainfall|snowfall|hurricane|\bweather\b|°c\b|°f\b|degrees celsius|degrees fahrenheit/i],
+  ['sports', /\bvs\.?\b|win on 20|o\/u|nba|nfl|mlb|ufc|atp|wta|premier league|match|\bfc\b/i],
+  ['macro', /fed|interest rate|cpi|inflation|gdp|recession|jobs/i],
+  ['politics', /trump|election|president|senate|congress|poll|nominee|war|ceasefire/i],
+];
+function categorizeClient(title, slug) {
+  const s = `${title || ''} ${slug || ''}`;
+  for (const [name, pat] of CAT_PATTERNS) {
+    if (pat.test(s)) return name;
+  }
+  return 'other';
+}
 // Combo/parlay bets AND several markets into one wager; they have no single
 // outcome and cannot be mirrored as one trade.
 const isCombo = (t) => !t.outcome && / AND /.test(t.title || '');
@@ -113,6 +137,7 @@ const VERDICT_WORD = {
 };
 const CAT_LABEL = {
   crypto: 'Crypto', sports: 'Sports', politics: 'Politics', esports: 'Esports',
+  csgo: 'CS:GO', valorant: 'Valorant',
   combos: 'Parlays', economics: 'Economics', tech: 'Tech', culture: 'Culture',
   finance: 'Finance', weather: 'Weather', mentions: 'Mentions',
   macro: 'Macro', other: '',
@@ -211,6 +236,7 @@ function addTrade(raw, live) {
     slug: raw.slug || raw.eventSlug || '',
     condition: raw.condition || raw.conditionId || '',
     end_date: raw.end_date || '',
+    category: raw.category || categorizeClient(raw.title, raw.slug),
     tx: raw.tx || raw.transactionHash || '',
     live: !!live,
   };
@@ -503,8 +529,14 @@ function checkCopies() {
       if ($('#mine-notify')?.checked && !state.notified.has(c.key)
           && Notification?.permission === 'granted') {
         state.notified.add(c.key);
-        new Notification(`${displayName(c.name, c.wallet)} has EXITED`, {
-          body: `${c.title || ''} — they got out ${ago(st.exitedAt)} ago. You're still in.`,
+        // Actionable, not just a fact: what you put in, at what price, and
+        // where to go decide -- rather than guess a live P&L number here that
+        // could already be stale by the time the notification is read.
+        new Notification(`${displayName(c.name, c.wallet)} just exited`, {
+          body: `${c.title || ''}${c.outcome ? ` (${c.outcome})` : ''} — they got out `
+            + `${ago(st.exitedAt)} ago. You put in ${money(c.stake)} at `
+            + `${((c.entryPrice || 0) * 100).toFixed(0)}¢ and are still in. Open My Copies `
+            + 'to see your current price and decide whether to follow them out.',
           tag: c.key,
         });
       }
@@ -541,11 +573,13 @@ function copyButton(data) {
 
 /* ──────────────────────────── live buys ─────────────────────────────── */
 
-// A bet stays visible for TRADE_VISIBLE_S after it happened, then drops off --
-// requested explicitly: rows should hang around for at least 5 minutes rather
-// than being pushed off by whatever arrived after them. MAX_ROWS is kept only
-// as a safety valve against a genuine flood, not the normal way rows leave.
-const TRADE_VISIBLE_S = 5 * 60;
+// A bet stays visible for TRADE_VISIBLE_S after it happened, then drops off
+// on its own rather than being pushed off by whatever arrived after it.
+// Originally 5 minutes; tightened to 2 once Min bet defaulted to $0 -- at
+// that volume a 5-minute-old row reads as stale next to what's arriving every
+// few seconds now. MAX_ROWS is kept only as a safety valve against a genuine
+// flood, not the normal way rows leave.
+const TRADE_VISIBLE_S = 2 * 60;
 
 function visibleTrades() {
   const min = Number($('#t-min').value) || 0;
@@ -554,6 +588,7 @@ function visibleTrades() {
     .filter((t) => {
       if (t.ts < cutoff) return false;
       if (t.usd < min) return false;
+      if (state.tradeCategory && t.category !== state.tradeCategory) return false;
       if (state.who === 'best') return t.verdict === 'CANDIDATE' || t.verdict === 'WATCH';
       if (state.who === 'all') return !!t.verdict;
       return !isChurn(t);
@@ -571,10 +606,21 @@ function renderTrades() {
   if (!rows.length) {
     list.textContent = '';
     empty.hidden = false;
-    empty.textContent = state.trades.length
-      ? `Nothing above $${$('#t-min').value} right now — ${state.trades.length} smaller bets `
-        + 'were filtered out. Lower "Min bet" to see more.'
-      : (state.source === 'live' ? 'Connected. Waiting for bets…' : 'Loading…');
+    // Three genuinely different reasons for an empty tape, misdiagnosed as
+    // one before -- "lower your min bet" was shown even with min bet already
+    // at $0, whenever the real cause was the 2-minute window (nothing THAT
+    // recent yet, not nothing big enough).
+    if (!state.trades.length) {
+      empty.textContent = state.source === 'live' ? 'Connected. Waiting for bets…' : 'Loading…';
+    } else {
+      const cutoff = Date.now() / 1000 - TRADE_VISIBLE_S;
+      const recent = state.trades.filter((t) => t.ts >= cutoff).length;
+      empty.textContent = recent
+        ? `${recent} bet${recent === 1 ? '' : 's'} in the last ${TRADE_VISIBLE_S / 60} min, `
+          + 'but none match min bet / topic / who right now. Loosen a filter to see them.'
+        : `Nothing in the last ${TRADE_VISIBLE_S / 60} minutes yet — this tape clears fast. `
+          + 'A new bet will show up here the moment one comes in.';
+    }
     return;
   }
   empty.hidden = true;
@@ -646,14 +692,27 @@ function renderTrades() {
 
 /* ────────────────────────── what they hold ──────────────────────────── */
 
+// A "just got out" this recent gets the same loud alert treatment as a My
+// Copies exit -- requested explicitly: any followed whale's exit should be
+// something you're ALERTED to, not just a quiet pill you'd only notice by
+// scrolling past it.
+const FRESH_EXIT_S = 10 * 60;
+
 function renderPositions() {
   const { open, recently_closed } = state.positions;
   const showOpen = state.posFilter !== 'closed';
   const showClosed = state.posFilter !== 'open';
-  const rows = [
+  let rows = [
     ...(showOpen ? open.map((p) => ({ ...p, _open: true })) : []),
     ...(showClosed ? recently_closed.map((p) => ({ ...p, _open: false })) : []),
   ];
+  if (state.posCategory) rows = rows.filter((p) => p.category === state.posCategory);
+  // TRUE chronological order across open+closed. Each half arrives from the
+  // server already sorted by last_event_at, but concatenating them means
+  // "Everything" showed every open position before any exit regardless of
+  // which was more recent -- a fresh exit could sit buried behind hundreds
+  // of unrelated open positions. last_event_at is populated on both.
+  rows.sort((a, b) => (b.last_event_at || 0) - (a.last_event_at || 0));
 
   const list = $('#positions');
   const empty = $('#positions-empty');
@@ -669,7 +728,14 @@ function renderPositions() {
 
   const frag = document.createDocumentFragment();
   for (const p of rows.slice(0, 250)) {
-    const li = el('li', 'row');
+    const justExited = !p._open && p.last_event_at
+      && (Date.now() / 1000 - p.last_event_at) < FRESH_EXIT_S;
+    const li = el('li', `row${justExited ? ' alert' : ''}`);
+
+    if (justExited) {
+      li.appendChild(el('div', 'alert-banner',
+        `⚠ ${displayName(p.name, p.wallet)} just got out — ${ago(p.last_event_at)} ago.`));
+    }
 
     const who = el('div', 'who');
     const nm = el('span', 'nm', displayName(p.name, p.wallet));
@@ -1269,6 +1335,23 @@ function openDrawer(c) {
     }
   }
 
+  const theirTrades = state.trades.filter(
+    (t) => (t.wallet || '').toLowerCase() === (c.wallet || '').toLowerCase());
+  if (theirTrades.length >= 3) {
+    const counts = {};
+    for (const t of theirTrades) counts[t.category || 'other'] = (counts[t.category || 'other'] || 0) + 1;
+    const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    b.appendChild(el('div', 'sec', 'What they actually trade'));
+    const catRow = el('div', 'facts');
+    for (const [cat, n] of ranked.slice(0, 6)) {
+      const f = el('div', 'f');
+      f.appendChild(el('div', 'fv', String(n)));
+      f.appendChild(el('div', 'fk', CAT_LABEL[cat] || 'Other'));
+      catRow.appendChild(f);
+    }
+    b.appendChild(catRow);
+  }
+
   if (c.flags?.length) {
     b.appendChild(el('div', 'sec', 'Why it scored this way'));
     const ul = el('ul', 'flags');
@@ -1393,7 +1476,9 @@ const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
   apply(b);
 });
 chipBar('#t-chips', (b) => { state.who = b.dataset.who; state.dirty = true; });
+chipBar('#t-cat-chips', (b) => { state.tradeCategory = b.dataset.cat; state.dirty = true; });
 chipBar('#p-chips', (b) => { state.posFilter = b.dataset.p; renderPositions(); });
+chipBar('#p-cat-chips', (b) => { state.posCategory = b.dataset.cat; renderPositions(); });
 chipBar('#w-chips', (b) => { state.verdict = b.dataset.v; renderBoard(); });
 chipBar('#w-cat-chips', (b) => { state.category = b.dataset.cat; renderBoard(); });
 chipBar('#soon-chips', (b) => { state.marketsBucket = b.dataset.bucket; renderMarketsSoon(); });

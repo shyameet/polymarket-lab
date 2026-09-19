@@ -45,7 +45,7 @@ import sys
 from typing import Any
 
 from . import api
-from .feed import FEED_VERDICTS
+from .feed import FEED_VERDICTS, categorize
 
 MAX_OPEN_PER_WALLET = 12
 MAX_CLOSED_PER_WALLET = 8
@@ -89,6 +89,7 @@ def _normalize(p: dict, card: dict, status: str) -> dict:
         "status": status,                      # OPEN | CLOSED, a fact from the API
         "title": p.get("title") or "",
         "slug": p.get("slug") or "",
+        "category": categorize(p.get("title") or "", p.get("slug") or ""),
         "condition": p.get("condition_id") or "",
         "outcome": p.get("outcome") or "",
         "avg_price": round(avg_price, 4),
