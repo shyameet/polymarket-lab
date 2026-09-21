@@ -881,7 +881,12 @@ function renderPositions() {
     li.appendChild(who);
 
     const received = p._receivedAt ? p._receivedAt / 1000 : state.posMeta?.generated_at;
-    li.appendChild(el('div', 'why', `${p._receivedAt ? 'API received' : 'Saved snapshot'} ${received ? ago(received)+' ago' : 'age unknown'}${state.liveRefresh?.walletChecks[p.wallet]?.truncated ? ' · capped API sample' : ''}`));
+    const ageLabel = el('div', 'why');
+    ageLabel.dataset.received = received || 0;
+    ageLabel.dataset.source = p._receivedAt ? 'API received' : 'Saved snapshot';
+    ageLabel.dataset.coverage = state.liveRefresh?.walletChecks[p.wallet]?.truncated ? ' · capped API sample' : '';
+    ageLabel.textContent = `${ageLabel.dataset.source} ${received ? ago(received)+' ago' : 'age unknown'}${ageLabel.dataset.coverage}`;
+    li.appendChild(ageLabel);
 
     const pnl = p._open ? p.unrealized_pnl : p.realized_pnl;
     const right = el('div');
@@ -940,6 +945,10 @@ function renderPositionStats() {
   add('Got out (7 days)', String(state.positions.recently_closed.filter(inScope).length));
   if (state.posMeta?.generated_at) add('Saved fallback', `${ago(state.posMeta.generated_at)} ago`);
   state.liveRefresh?.paintStatus();
+  document.querySelectorAll('[data-received]').forEach(n => {
+    const at = Number(n.dataset.received);
+    n.textContent = `${n.dataset.source} ${at ? ago(at)+' ago' : 'age unknown'}${n.dataset.coverage}`;
+  });
 }
 
 /* ─────────────────────────── closing soon (markets) ──────────────────── *
