@@ -935,7 +935,7 @@ function renderPositionStats() {
     box.appendChild(d);
   };
   const inScope = p => (!state.holdingWallet || p.wallet === state.holdingWallet)
-    && isWatched(p.wallet) && (!state.posCategory || p.category === state.posCategory);
+    && (!state.watchOnly || isWatched(p.wallet)) && (!state.posCategory || p.category === state.posCategory);
   add('Still holding', String(state.positions.open.filter(inScope).length));
   add('Got out (7 days)', String(state.positions.recently_closed.filter(inScope).length));
   if (state.posMeta?.generated_at) add('Saved fallback', `${ago(state.posMeta.generated_at)} ago`);
