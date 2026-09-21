@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260919e">
+<link rel="stylesheet" href="style.css?v=20260921a">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -65,6 +65,8 @@
   <span id="watch-count" class="tiny">0 followed</span>
   <span class="tiny">Saved in this browser · filters boards, whale trades and holdings</span>
 </div>
+
+<p id="section-freshness" class="watchbar tiny" aria-live="off"></p>
 
 <section id="view-research" class="view" hidden>
   <h2>Find specialists. Follow their changes.</h2>
@@ -145,8 +147,9 @@
 
 <!-- ───────────────────────────── CLOSING SOON ───────────────────────────── -->
 <section id="view-soon" class="view" hidden>
+  <p id="markets-live-status" class="hint">Connecting to the market API…</p>
   <div class="callout">
-    <b>Every open market, grouped by how soon it closes.</b> Whale-independent —
+    <b>Upcoming markets, grouped by how soon they close.</b> Up to 40 markets per window. Whale-independent —
     this is what can be traded right now. All times are UTC, not IST or ET.
   </div>
 
@@ -207,11 +210,16 @@
 <!-- ──────────────────────── WHAT THEY HOLD ──────────────────────── -->
 <section id="view-positions" class="view" hidden>
   <div class="callout">
-    <b>Everything a followed whale is holding right now, and what they just got out of.</b>
-    Read straight from Polymarket's own records. If you've copied a position,
-    track it under <b>My copies</b> and you'll get a warning here the moment
-    they exit.
+    <b>Whale holdings and confirmed exits.</b>
+    Live API refreshes run while this section is open. Pick one whale for focused updates;
+    all-whale mode rotates through the list. Holdings are capped samples, not every position.
+    If the API is unreachable, saved rows retain their original timestamps.
   </div>
+
+  <div class="controls"><label>Live holdings for
+    <select id="holding-wallet"><option value="">All screened whales (rotating)</option></select>
+  </label></div>
+  <p id="holdings-live-status" class="hint">Connecting to the positions API…</p>
 
   <div class="controls">
     <div class="chips" id="p-chips">
@@ -245,8 +253,8 @@
   <div class="callout warn">
     <b>Positions you've copied.</b> Your notebook is saved in this browser only. Public whale and market IDs are
     queried at Polymarket; no trade is ever placed for you. Each one is checked directly
-    against Polymarket every 30 seconds. API responses can be cached for five
-    minutes, and saved snapshots may be much older. Exit alerts are delayed
+    against Polymarket on a one-second refresh loop, with slower retries on failure. API responses may still lag;
+    saved snapshots may be much older. Exit alerts are delayed
     observations, not instant execution signals. Keep this page open for checks and alerts. It
     does not tell you that getting out is the right move — see
     <a href="#" id="mine-method-link">how this works</a>.
@@ -302,6 +310,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260919e" type="module"></script>
+<script src="app.js?v=20260921a" type="module"></script>
 </body>
 </html>

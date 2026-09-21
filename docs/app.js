@@ -22,8 +22,8 @@
  */
 
 const DIRECT_WS = 'wss://ws-live-data.polymarket.com';
-const REFRESH_POLL_MS = 20_000;
-const RENDER_MS = 2200;
+const REFRESH_POLL_MS = 1000;
+const RENDER_MS = 1000;
 const MAX_ROWS = 100;
 const DIRECT_MAX_FAILS = 3;
 const COPIES_KEY = 'myCopies.v1';
@@ -56,6 +56,7 @@ const state = {
   marketsSoon: null, marketsBucket: 'hours',
   cryptoFlows: null,
   watchlist: new Set(), watchOnly: false, insights: null, research: null,
+  liveRefresh: null, holdingWallet: '',
 };
 
 function loadWatchlist() {
@@ -303,6 +304,7 @@ function addTrade(raw, live) {
   }
   state.dirty = true;
   state.research?.observeTrade(t);
+  state.liveRefresh?.onTrade(t);
   return true;
 }
 
@@ -382,18 +384,50 @@ function onWsDead() {
 
 /* ─────────────────────────── data loading ───────────────────────────── */
 
+const snapshotVersions = new Map(), snapshotBusy = new Set();
+async function snapshotJSON(path) {
+  if (snapshotBusy.has(path)) return null;
+  snapshotBusy.add(path);
+  try {
+    const previous = snapshotVersions.get(path);
+    // Lightweight revision check: don't parse multi-megabyte JSON every second.
+    if (previous) {
+      const head = await fetch(path, { method:'HEAD', cache:'no-cache', signal:AbortSignal.timeout(8000) });
+      if (!head.ok) throw new Error(`Snapshot HTTP ${head.status}`);
+      const version = head.headers.get('etag') || head.headers.get('last-modified');
+      if (version && version === previous) return null;
+    }
+    const r = await fetch(path, {cache:'no-cache',signal:AbortSignal.timeout(8000)});
+    if (!r.ok) throw new Error(`Snapshot HTTP ${r.status}`);
+    const data = await r.json();
+    const version = r.headers.get('etag') || r.headers.get('last-modified');
+    if (version) snapshotVersions.set(path,version);
+    return data;
+  } finally { snapshotBusy.delete(path); }
+}
+
 async function loadWhales() {
   try {
     const [w, m] = await Promise.all([
-      fetch('data/whales.json', { cache: 'no-cache' }).then((r) => r.json()),
-      fetch('data/meta.json', { cache: 'no-cache' }).then((r) => r.json()).catch(() => null),
+      snapshotJSON('data/whales.json'),
+      snapshotJSON('data/meta.json').catch(() => null),
     ]);
+    if (m) state.meta = m;
+    if (!w) return;
     if (!Array.isArray(w)) throw new Error('Invalid wallet snapshot');
     // Older snapshots can carry the pre-fix WATCH verdict for losing wallets.
     state.whales = w.map((c) => c.position_pnl <= 0 && c.verdict !== 'INSUFFICIENT'
       ? { ...c, verdict: 'NOT COPYABLE' } : c);
     state.byWallet = new Map(state.whales.map((c) => [(c.wallet || '').toLowerCase(), c]));
-    state.meta = m;
+    const select = $('#holding-wallet');
+    if (select) {
+      select.replaceChildren(el('option', null, 'All screened whales (rotating)'));
+      select.firstChild.value = '';
+      for (const c of state.whales.filter(c => ['CANDIDATE','WATCH','FRAGILE'].includes(c.verdict))) {
+        const o = el('option', null, displayName(c.name,c.wallet)); o.value=c.wallet; select.appendChild(o);
+      }
+      select.value=state.holdingWallet;
+    }
     renderBoard();
     renderMethod();
   } catch (e) { console.error('whales', e); }
@@ -401,7 +435,7 @@ async function loadWhales() {
 
 async function loadSnapshot() {
   try {
-    const f = await fetch('data/whale_trades.json', { cache: 'no-cache' }).then((r) => r.json());
+    const f = await snapshotJSON('data/whale_trades.json');
     if (!f?.trades) return;
     state.snapshotMeta = f;
     for (const t of f.trades) addTrade(t, false);
@@ -412,9 +446,10 @@ async function loadSnapshot() {
 
 async function loadPositions() {
   try {
-    const p = await fetch('data/whale_positions.json', { cache: 'no-cache' }).then((r) => r.json());
+    const p = await snapshotJSON('data/whale_positions.json');
     if (!p) return;
-    state.positions = { open: p.open || [], recently_closed: p.recently_closed || [] };
+    state.positions = state.liveRefresh ? state.liveRefresh.positionSnapshot(p)
+      : { open: p.open || [], recently_closed: p.recently_closed || [] };
     state.posMeta = p;
     if (state.view === 'positions') renderPositions();
     migrateCopies();
@@ -508,14 +543,19 @@ function migrateCopies() {
  * for tracked copies, but REST itself is still cached for up to five minutes.
  */
 const POLY_DATA = 'https://data-api.polymarket.com/v2';
-const COPY_POLL_MS = 30_000; // REST may be cached for five minutes; polling is not a live fill feed.
+const COPY_POLL_MS = 1000; // One-second target, bounded by request duration and backoff.
 let copiesPolling = false;
+let copiesRetryAt = 0;
 
 async function positionRows(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const direct = new URL(url);
+    const relay = relayUrl();
+    const target = new URL(relay ? `${relay}/api/data${direct.pathname}${direct.search}` : direct.href);
+    target.searchParams.set('_',String(Date.now()));
+    const response = await fetch(target.href, { signal: controller.signal, cache:'no-store' });
     if (!response.ok) throw new Error(`Positions HTTP ${response.status}`);
     const body = await response.json();
     if (!Array.isArray(body?.data)) throw new Error('Invalid positions response');
@@ -555,7 +595,7 @@ async function liveCopyLookup(wallet, condition, outcome) {
 }
 
 async function pollAllCopies() {
-  if (copiesPolling) return;
+  if (copiesPolling || Date.now() < copiesRetryAt) return;
   copiesPolling = true;
   try {
     const targets = state.copies.filter((c) => c.condition);
@@ -568,6 +608,7 @@ async function pollAllCopies() {
         if (result) c.live = result;
       }
     }));
+    copiesRetryAt = state.copies.some(c => c.checkFailed) ? Date.now()+10_000 : 0;
     checkCopies();
   } finally { copiesPolling = false; }
 }
@@ -599,11 +640,12 @@ function copyStatus(c) {
 
   if (!c.condition) return { state: 'unknown' };
   const snapshotAt = Number(state.posMeta?.generated_at || 0) * 1000;
-  if (!snapshotAt || Date.now() - snapshotAt > POSITION_MAX_AGE_MS) return { state: 'stale' };
   const openHit = state.positions.open.find((p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
-  if (openHit) return { state: 'in', price: openHit.current_price, whalePos: openHit };
   const closedHit = state.positions.recently_closed.find(
     (p) => posKey(p.wallet, p.slug, p.title, p.outcome, p.condition) === c.key);
+  const observedAt = openHit?._receivedAt || closedHit?._receivedAt || snapshotAt;
+  if (!observedAt || Date.now() - observedAt > POSITION_MAX_AGE_MS) return { state: 'stale' };
+  if (openHit) return { state: 'in', price: openHit.current_price, whalePos: openHit };
   if (closedHit && Number(closedHit.last_event_at) >= c.addedAt) return { state: 'exited', exitedAt: closedHit.last_event_at, whalePos: closedHit };
   return { state: 'unknown' };
 }
@@ -797,6 +839,7 @@ function renderPositions() {
     ...(showClosed ? recently_closed.map((p) => ({ ...p, _open: false })) : []),
   ];
   if (state.posCategory) rows = rows.filter((p) => p.category === state.posCategory);
+  if (state.holdingWallet) rows = rows.filter(p => p.wallet === state.holdingWallet);
   // TRUE chronological order across open+closed. Each half arrives from the
   // server already sorted by last_event_at, but concatenating them means
   // "Everything" showed every open position before any exit regardless of
@@ -836,6 +879,9 @@ function renderPositions() {
     who.appendChild(el('span', `pstatus ${p._open ? 'open' : 'exited'}`,
       p._open ? 'STILL HOLDING' : 'GOT OUT'));
     li.appendChild(who);
+
+    const received = p._receivedAt ? p._receivedAt / 1000 : state.posMeta?.generated_at;
+    li.appendChild(el('div', 'why', `${p._receivedAt ? 'API received' : 'Saved snapshot'} ${received ? ago(received)+' ago' : 'age unknown'}${state.liveRefresh?.walletChecks[p.wallet]?.truncated ? ' · capped API sample' : ''}`));
 
     const pnl = p._open ? p.unrealized_pnl : p.realized_pnl;
     const right = el('div');
@@ -888,9 +934,12 @@ function renderPositionStats() {
     d.appendChild(el('div', 'v', v));
     box.appendChild(d);
   };
-  add('Still holding', String(state.positions.open.length));
-  add('Got out (7 days)', String(state.positions.recently_closed.length));
-  if (state.posMeta?.generated_at) add('Updated', `${ago(state.posMeta.generated_at)} ago`);
+  const inScope = p => (!state.holdingWallet || p.wallet === state.holdingWallet)
+    && isWatched(p.wallet) && (!state.posCategory || p.category === state.posCategory);
+  add('Still holding', String(state.positions.open.filter(inScope).length));
+  add('Got out (7 days)', String(state.positions.recently_closed.filter(inScope).length));
+  if (state.posMeta?.generated_at) add('Saved fallback', `${ago(state.posMeta.generated_at)} ago`);
+  state.liveRefresh?.paintStatus();
 }
 
 /* ─────────────────────────── closing soon (markets) ──────────────────── *
@@ -904,9 +953,9 @@ const BUCKET_LABEL = { hours: 'Next few hours', today: 'By end of today',
 
 async function loadMarketsSoon() {
   try {
-    const m = await fetch('data/markets_soon.json', { cache: 'no-cache' }).then((r) => r.json());
+    const m = await snapshotJSON('data/markets_soon.json');
     if (!m?.buckets) return;
-    state.marketsSoon = m;
+    state.marketsSoon = state.liveRefresh ? state.liveRefresh.marketSnapshot(m) : m;
     if (state.view === 'soon') renderMarketsSoon();
   } catch { /* mid-deploy; next tick retries */ }
 }
@@ -944,7 +993,7 @@ function renderMarketsSoon() {
   const data = state.marketsSoon;
   if (!data) { empty.hidden = false; empty.textContent = 'Loading…'; list.textContent = ''; return; }
 
-  const rows = data.buckets[state.marketsBucket] || [];
+  const rows = (data.buckets[state.marketsBucket] || []).filter(m => Date.parse(m.end_date) > Date.now());
   const statBox = $('#soon-stats');
   if (statBox) {
     statBox.textContent = '';
@@ -956,7 +1005,10 @@ function renderMarketsSoon() {
     };
     add('Open markets', String(rows.length));
     add('Window ends', closesIn(data.bucket_ends?.[state.marketsBucket]));
-    if (data.generated_at) add('Updated', `${ago(data.generated_at)} ago`);
+    const liveAt = state.liveRefresh?.marketChecks[state.marketsBucket]?.at;
+    if (liveAt) add('API received', `${ago(liveAt / 1000)} ago`);
+    else if (data.generated_at) add('Saved fallback', `${ago(data.generated_at)} ago`);
+    state.liveRefresh?.paintStatus();
   }
 
   list.textContent = '';
@@ -1043,7 +1095,7 @@ function renderMarketsSoon() {
 
 async function loadCryptoFlows() {
   try {
-    const f = await fetch('data/crypto_flows.json', { cache: 'no-cache' }).then((r) => r.json());
+    const f = await snapshotJSON('data/crypto_flows.json');
     if (!f?.flows) return;
     state.cryptoFlows = f;
     if (state.view === 'flows') renderCryptoFlows();
@@ -1214,8 +1266,8 @@ function renderMine() {
       li.appendChild(el('div', 'why', st.checkedAt
         ? "The last cached API check did not confirm an open position or an exit after you saved this copy. "
           + 'This does not establish that the whale has exited.'
-        : "Not yet in the whale's currently-tracked holdings or their last 7 days of exits. A "
-          + 'cached API check runs every 30 seconds; availability and freshness are not guaranteed.'));
+        : "Not yet in the whale's currently-tracked holdings or their last 7 days of exits. "
+          + 'API checks target one second, slowing down after failures; upstream freshness is not guaranteed.'));
     }
 
     const actions = el('div', 'actions');
@@ -1571,7 +1623,17 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
   if (state.view === 'soon') renderMarketsSoon();
   if (state.view === 'flows') renderCryptoFlows();
   if (state.view === 'research') state.research?.render();
+  state.liveRefresh?.tick();
 }));
+
+$('#holding-wallet').addEventListener('change', e => {
+  state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
+});
+import('./live.js?v=20260921a').then(({initLive}) => {
+  state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
+    renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
+  state.liveRefresh.tick();
+}).catch(() => { $('#holdings-live-status').textContent='Live refresh could not load. Reload to retry.'; });
 
 loadWatchlist();
 $('#watch-only').checked = state.watchOnly;
@@ -1580,9 +1642,9 @@ $('#watch-only').addEventListener('change', e => {
   state.watchOnly = e.target.checked;
   lsSet('whaleWatchOnly.v1', String(state.watchOnly)); refreshWatchlist();
 });
-import('./research.js?v=20260919e').then(({initResearch}) => {
+import('./research.js?v=20260921a').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
-    showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
+    snapshotJSON, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
 
 const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
@@ -1670,22 +1732,39 @@ setInterval(() => {
   state.stamps = state.stamps.filter((t) => t > Date.now() - 10_000);
   refreshSourceLabel();
   if (state.view === 'trades') state.dirty = true;
+  if (state.view === 'soon') renderMarketsSoon();
+  if (state.view === 'positions') renderPositionStats();
+  state.liveRefresh?.tick();
+  const historical = {whales:state.meta?.generated_at,research:state.insights?.generated_at,
+    flows:state.cryptoFlows?.generated_at};
+  const stamp=historical[state.view];
+  $('#section-freshness').textContent=stamp
+    ? `Checking for new snapshots every second while this section is open · source generated ${ago(stamp)} ago. Historical scores and research are computed by the pipeline, not the live trade socket.`
+    : state.view==='positions'||state.view==='soon'||state.view==='mine'
+      ? 'Direct API refresh targets one second. Slow requests, upstream delays and rate limits can extend it; saved data keeps its original age.'
+      : 'Trade tape uses the live websocket when connected. Saved-data fallback retains its original age.';
 }, 1000);
 
-setInterval(() => { loadSnapshot(); loadPositions(); }, REFRESH_POLL_MS);
+setInterval(() => {
+  if (document.hidden) return;
+  if (state.view==='whales') loadWhales();
+  if (state.view==='trades') loadSnapshot();
+  if (state.view==='positions'||state.view==='mine') loadPositions();
+  if (state.view==='soon') loadMarketsSoon();
+  if (state.view==='flows') loadCryptoFlows();
+}, REFRESH_POLL_MS);
+setInterval(loadWhales,60_000);
 
 // The actual fix for "goes blank": poll every tracked copy directly and
 // continuously, independent of the once-per-15-30-minute board rebuild. Runs
 // regardless of which tab is open (an exit while you're on Live buys should
 // still update the badge), just skips the DOM repaint unless you're looking.
-setInterval(() => { if (state.copies.length) pollAllCopies(); }, COPY_POLL_MS);
+setInterval(() => { if (!document.hidden && state.copies.length) pollAllCopies(); }, COPY_POLL_MS);
 
 loadCopies();
 updateMineBadge();
 loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);
 if (state.copies.length) pollAllCopies();
 loadMarketsSoon();
-setInterval(loadMarketsSoon, REFRESH_POLL_MS);
 
 loadCryptoFlows();
-setInterval(loadCryptoFlows, REFRESH_POLL_MS);

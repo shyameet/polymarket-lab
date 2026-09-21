@@ -313,7 +313,8 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
 .research-card .headline-num{margin-top:14px}
 .research-title{color:var(--fg)}
 #view-research h3{margin-top:30px;color:var(--gold)}
-#research-topic{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;max-width:100%}
+#research-topic,#holding-wallet{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;max-width:100%}
+#holding-wallet{max-width:min(80vw,440px)}
 button[aria-pressed="true"]{border-color:var(--gold);color:var(--gold)}
 
 /* ── footer / method ────────────────────────────────────────────────── */

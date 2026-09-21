@@ -19,5 +19,6 @@ jobs:
           node-version: '22'
       - run: node --check docs/app.js
       - run: node --check docs/research.js
+      - run: node --check docs/live.js
       - run: node --test tests/*.test.cjs
       - run: python -m unittest discover -s tests -p 'test_*.py'

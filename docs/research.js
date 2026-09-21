@@ -28,7 +28,7 @@ export function followabilitySummary(samples, wallet) {
     score: measured.length >= 10 ? Math.round(100 * available / measured.length) : null };
 }
 
-export function initResearch({ state, displayName, money, ago, watchButton, isWatched, refresh, showWhale }) {
+export function initResearch({ state, displayName, money, ago, watchButton, isWatched, refresh, showWhale, snapshotJSON }) {
   const $ = s => document.querySelector(s);
   const node = (tag, cls, text) => {
     const n = document.createElement(tag); if (cls) n.className = cls;
@@ -107,9 +107,8 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
   async function load() {
     if (loading) return; loading = true;
     try {
-      const response = await fetch('data/whale_insights.json', {cache:'no-cache', signal:AbortSignal.timeout(15_000)});
-      if (!response.ok) throw new Error('Research snapshot unavailable');
-      const data = await response.json();
+      const data = await snapshotJSON('data/whale_insights.json');
+      if (!data) return;
       if (!data || !Number.isFinite(data.generated_at) || !data.profiles || !Array.isArray(data.events)) throw new Error('Invalid research snapshot');
       state.insights = data; refresh(); render();
     } catch { render(); } finally { loading = false; }
@@ -140,6 +139,6 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
   }
   $('#research-topic').addEventListener('change',render);
   $('#research-qualified').addEventListener('change',render);
-  load(); setInterval(load,60_000);
+  load(); setInterval(() => {if(!document.hidden && state.view==='research')load();},1000);
   return {render,observeTrade};
 }

@@ -8,7 +8,8 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../docs/app.js'), 'utf8');
 const definitions = source.slice(0, source.lastIndexOf('/*', source.indexOf('const VIEWS =')));
 function app(fetch = async () => { throw new Error('offline'); }) {
-  const ctx = vm.createContext({ console, Date, URLSearchParams, AbortController,
+  const ctx = vm.createContext({ console, Date, URL, URLSearchParams, AbortController,
+    location: {search:''},
     setTimeout, clearTimeout, fetch, document: { querySelector: () => null },
     localStorage: { getItem: () => null, setItem() {} } });
   vm.runInContext(definitions, ctx);

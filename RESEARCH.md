@@ -67,3 +67,23 @@ Run `node --test tests/*.test.cjs` and
 Tests cover per-topic aggregation, concentration and sample screens, opposite
 outcomes, missing/capped positions, contradictory statuses, adds/reductions,
 explicit exits, price/depth limits, stale books, and sample qualification.
+# Refresh behavior
+
+The browser now requests the active closing-soon window every second directly
+from Gamma, and OPEN/CLOSED positions from the Data API while holdings is open.
+Selecting one whale targets a one-second refresh; all-whale mode rotates up to
+four wallets concurrently. Requests never overlap for the same source and use
+timeouts and failure backoff. Hidden pages pause these checks. My Copies also
+targets one second with bounded concurrency. A configured relay is optional.
+
+API receipt time is not an exchange event timestamp or a freshness guarantee.
+The position sample is capped at 100 rows per status per wallet, with pagination
+coverage flagged. Market windows contain at most 40 results and remove expired
+markets locally. Older committed snapshots cannot replace newer API observations.
+
+Rankings, research and crypto-flow history remain pipeline snapshots. The active
+section checks for a changed file every second using revision headers, fetching
+the full JSON only after a change. This does not accelerate GitHub Actions or
+guarantee GitHub Pages CDN propagation within a second. Original source ages
+remain visible. High-frequency REST checks increase bandwidth and relay usage;
+the relay's free daily request allowance can be exhausted by extended use.
