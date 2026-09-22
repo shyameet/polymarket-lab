@@ -6,6 +6,20 @@ const code = fs.readFileSync(path.join(__dirname, '../docs/research.js'), 'utf8'
 const moduleReady = import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 const book = asks => ({asks, timestamp:String(Date.now())});
 
+test('live inventory comparisons do not invent entries or exits from missing rows',async()=>{
+  const {observedChanges}=await moduleReady;
+  const p={wallet:'a',condition:'c',outcome:'Yes',size:10};
+  const prior={at:100,open:[p]};
+  assert.equal(observedChanges(null,[p],[],110).length,0);
+  assert.equal(observedChanges(prior,[],[],110).length,0);
+  assert.equal(observedChanges(prior,[],[{...p,last_event_at:99}],110).length,0);
+  assert.equal(observedChanges(prior,[],[{...p,outcome:'No',last_event_at:105}],110).length,0);
+  assert.equal(observedChanges(prior,[{...p,size:12}],[],110)[0].delta_shares,2);
+  assert.equal(observedChanges(prior,[{...p,size:8}],[],110)[0].kind,'reduced');
+  assert.equal(observedChanges(prior,[],[{...p,last_event_at:105}],110)[0].kind,'exited');
+  assert.equal(observedChanges(prior,[p],[{...p,last_event_at:105}],110).length,0);
+});
+
 test('followability requires enough executable depth within the price limit', async () => {
   const {assessBook} = await moduleReady;
   assert.equal(assessBook(book([{price:'.51',size:'100'}]),.5).state,'available');

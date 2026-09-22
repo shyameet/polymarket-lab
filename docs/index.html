@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260922b">
+<link rel="stylesheet" href="style.css?v=20260922c">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -64,6 +64,7 @@
   <label><input type="checkbox" id="watch-only"> Only whales I follow</label>
   <span id="watch-count" class="tiny">0 followed</span>
   <span class="tiny">Saved in this browser · filters boards, whale trades and holdings</span>
+  <button id="show-screened" class="btn small">Show all screened whales</button>
 </div>
 
 <p id="section-freshness" class="watchbar tiny" aria-live="off"></p>
@@ -90,7 +91,8 @@
   </details>
   <ul id="topic-board" class="research-grid"></ul>
   <h3>Conviction tracker</h3>
-  <p class="hint">Net share changes between adjacent snapshots. Adds and reductions describe inventory, not intent; hedges and conversions can also change it. Exits require a confirmed closed position. Updates follow the snapshot schedule, not the live tape.</p>
+  <p class="hint">Net share changes between successive observations. While Research or Holdings is open, live API checks rotate through whales and compare successful responses. Browser observations are session-only; saved history comes from the pipeline. Adds and reductions describe inventory, not intent; missing positions never prove an exit.</p>
+  <p id="conviction-status" class="hint"></p>
   <ul id="conviction-feed" class="research-grid"></ul>
   <h3>Followability &amp; holding profiles</h3>
   <p class="hint">Followability checks whether $25 can still be bought within 2¢ of the whale’s fill, one minute after this browser sees a fresh live buy. Only followed whales are sampled, at most once per whale every 5 minutes. Keep this page open. The score requires 10 measured checks; failed checks are reported separately. Displayed depth is not a guaranteed fill, and fees are excluded.</p>
@@ -310,6 +312,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260922b" type="module"></script>
+<script src="app.js?v=20260922c" type="module"></script>
 </body>
 </html>

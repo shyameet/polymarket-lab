@@ -4,3 +4,4 @@ __pycache__/
 .env
 pipeline/.cache/
 *.log
+.wrangler/

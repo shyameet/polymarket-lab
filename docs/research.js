@@ -28,7 +28,27 @@ export function followabilitySummary(samples, wallet) {
     score: measured.length >= 10 ? Math.round(100 * available / measured.length) : null };
 }
 
-export function initResearch({ state, displayName, money, ago, watchButton, isWatched, refresh, showWhale, snapshotJSON }) {
+export function observedChanges(previous, open, closed, at) {
+  if (!previous || at <= previous.at) return [];
+  const key = p => JSON.stringify([p.wallet,p.condition,p.outcome]);
+  const current = new Map(open.map(p=>[key(p),p]));
+  const exits = new Map(closed.map(p=>[key(p),p]));
+  return previous.open.flatMap(p => {
+    if (!p.condition || !p.outcome || !Number.isFinite(p.size) || p.size<=0) return [];
+    const next=current.get(key(p)), exit=exits.get(key(p));
+    let delta,kind;
+    if(next && Number.isFinite(next.size) && next.size>0) {
+      delta=next.size-p.size;
+      if(Math.abs(delta)<1e-6)return [];
+      kind=delta>0?'added':'reduced';
+    } else if(!next && exit && exit.last_event_at>=previous.at && exit.last_event_at<=at) {
+      delta=-p.size;kind='exited';
+    } else return [];
+    return [{...p,kind,delta_shares:delta,since:previous.at,observed_at:at,source:'browser API'}];
+  });
+}
+
+export function initResearch({ state, displayName, money, ago, watchButton, isWatched, refresh, showWhale, snapshotJSON, relayURL }) {
   const $ = s => document.querySelector(s);
   const node = (tag, cls, text) => {
     const n = document.createElement(tag); if (cls) n.className = cls;
@@ -37,6 +57,15 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
   const labels = {weather:'Weather',politics:'Politics',crypto:'Crypto',sports:'Sports',
     csgo:'CS:GO',valorant:'Valorant',esports:'Other esports',macro:'Macro',other:'Other'};
   let samples = [], pending = new Set(), lastSample = new Map(), loading = false;
+  const observations = new Map();
+  let liveEvents=[];
+  function observePositions(wallet,open,closed,at) {
+    const seconds=at/1000;
+    liveEvents=[...observedChanges(observations.get(wallet),open,closed,seconds),...liveEvents]
+      .filter(e=>seconds-e.observed_at<86400).slice(0,1000);
+    observations.set(wallet,{open,at:seconds});
+    if(state.view==='research')render();
+  }
   try {
     const saved = JSON.parse(localStorage.getItem('whaleFollowability.v1') || '[]');
     if (Array.isArray(saved)) samples = saved.filter(s => s && typeof s.wallet === 'string'
@@ -59,7 +88,7 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
   function render() {
     const data = state.insights;
     $('#research-status').textContent = data
-      ? `Updated ${ago(data.generated_at)} ago · ${data.coverage?.wallets_requested ?? 0} screened whales requested · ${data.coverage?.closed_failed ?? 0} closed-history requests failed`
+      ? `Topic scores calculated ${ago(data.generated_at)} ago · ${data.coverage?.wallets_requested ?? 0} screened whales requested · ${data.coverage?.closed_failed ?? 0} closed-history requests failed. Trade-feed activity does not update these scores.`
       : 'Waiting for the first research snapshot. Watchlists and live followability sampling are available now.';
     const topic = $('#research-topic').value;
     const qualifiedOnly = $('#research-qualified').checked;
@@ -76,18 +105,22 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
         node('p','tiny',`Sample return on cost: ${r.roi == null ? 'unavailable' : (r.roi*100).toFixed(1)+'%'} · ${r.capped ? '200-position cap reached' : 'up to 200 closed positions'} · ${r.qualified ? 'consistency screen passed' : 'limited / unqualified evidence'}`));
       list.append(li);
     }
-    if (!rows.length) list.append(node('li','empty','No whales meet these filters yet. Turn off the consistency screen to inspect limited samples.'));
+    if (!rows.length) list.append(node('li','empty',state.watchOnly && !state.watchlist.size
+      ? 'Your watchlist is empty. Use “Show all screened whales” above.'
+      : 'No whales meet these filters yet. Turn off the consistency screen to inspect limited samples.'));
     const changes = $('#conviction-feed'); changes.replaceChildren();
-    const events = (data?.events || []).filter(e => visible(e.wallet));
+    const events = [...liveEvents,...(data?.events || [])].filter(e => visible(e.wallet))
+      .sort((a,b)=>b.observed_at-a.observed_at);
+    $('#conviction-status').textContent=`${observations.size} whales checked in this browser session · ${liveEvents.length} observed changes. Live checks run only while Research or Holdings is open; failures back off.`;
     for (const e of events.slice(0,60)) {
       const li = card(e.wallet);
       li.append(node('span',`tag ${e.kind === 'added' ? 'pos':'neg'}`,
         e.kind === 'exited' ? 'Full exit confirmed' : e.kind === 'added' ? 'Net shares added' : 'Net shares reduced'),
       node('p','research-title',`${e.title} · ${e.outcome}`),
-      node('p','tiny',`${Math.abs(e.delta_shares).toLocaleString()} shares · observed ${ago(e.observed_at)} ago · comparison spans ${span(e.observed_at-e.since)}`));
+      node('p','tiny',`${e.source || 'Saved pipeline'} · ${Math.abs(e.delta_shares).toLocaleString()} shares · observed ${ago(e.observed_at)} ago · comparison spans ${span(e.observed_at-e.since)}`));
       changes.append(li);
     }
-    if (!events.length) changes.append(node('li','empty','No confirmed changes yet. Comparisons start after two successful snapshots; missing positions are never treated as exits.'));
+    if (!events.length) changes.append(node('li','empty','No observed changes yet. Each whale needs two successful observations with a quantity change or a confirmed later closure; missing rows are never treated as exits.'));
     const profiles = $('#whale-profiles'); profiles.replaceChildren();
     const wallets = new Set([...state.watchlist, ...Object.keys(data?.holdings || {})]);
     const chosen = [...wallets].filter(visible).sort((a,b)=>Number(isWatched(b))-Number(isWatched(a)) || a.localeCompare(b));
@@ -125,7 +158,8 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
       try {
         // Background tab throttling cannot masquerade as a one-minute observation.
         if (Date.now()-now > 75_000) throw new Error('Delayed timer');
-        const r = await fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(t.asset)}`,
+        const relay=relayURL();
+        const r = await fetch(`${relay ? relay+'/api/clob' : 'https://clob.polymarket.com'}/book?token_id=${encodeURIComponent(t.asset)}`,
           {cache:'no-store', signal:AbortSignal.timeout(10_000)});
         if (!r.ok) throw new Error('Book unavailable');
         result = assessBook(await r.json(), t.price);
@@ -140,5 +174,5 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
   $('#research-topic').addEventListener('change',render);
   $('#research-qualified').addEventListener('change',render);
   load(); setInterval(() => {if(!document.hidden && state.view==='research')load();},1000);
-  return {render,observeTrade};
+  return {render,observeTrade,observePositions};
 }

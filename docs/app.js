@@ -257,7 +257,7 @@ function setSource(kind, detail) {
 
 function refreshSourceLabel() {
   if (state.source === 'live') {
-    setSource('live', `Live · ${(state.stamps.length / 10).toFixed(0)}/sec`);
+    setSource('live', `Trade feed live · ${(state.stamps.length / 10).toFixed(0)}/sec`);
   } else if (state.source === 'snapshot') {
     const ts = state.snapshotMeta?.newest_ts;
     setSource('snapshot', ts ? `Saved data · ${ago(ts)} old` : 'Saved data');
@@ -336,7 +336,7 @@ function connect() {
         subscriptions: [{ topic: 'activity', type: 'trades' }],
       }));
     }
-    setSource('live', 'Live');
+    setSource('live', 'Trade feed connected · waiting for trades');
     clearInterval(state.pinger);
     state.pinger = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) { try { ws.send('PING'); } catch {} }
@@ -1357,6 +1357,9 @@ function renderBoard() {
   const list = $('#board');
   list.textContent = '';
   $('#board-empty').hidden = rows.length > 0;
+  $('#board-empty').textContent = state.watchOnly && !state.watchlist.size
+    ? 'Your watchlist is empty. Use “Show all screened whales” above to find whales to follow.'
+    : 'Nothing matches these filters.';
   renderBoardStats(rows);
 
   const frag = document.createDocumentFragment();
@@ -1426,7 +1429,7 @@ function renderBoardStats(rows) {
   add('Worth following', String((v.CANDIDATE || 0) + (v.WATCH || 0)));
   add('Showing', String(rows.length));
   add('Checked in total', String(state.whales.length));
-  if (state.meta?.generated_at) add('Updated', `${ago(state.meta.generated_at)} ago`);
+  if (state.meta?.generated_at) add('Scores calculated', `${ago(state.meta.generated_at)} ago`);
 
   const intro = $('#w-intro');
   if (intro) {
@@ -1647,7 +1650,7 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
 $('#holding-wallet').addEventListener('change', e => {
   state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
 });
-import('./live.js?v=20260921a').then(({initLive}) => {
+import('./live.js?v=20260922c').then(({initLive}) => {
   state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
     renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
   state.liveRefresh.tick();
@@ -1660,9 +1663,13 @@ $('#watch-only').addEventListener('change', e => {
   state.watchOnly = e.target.checked;
   lsSet('whaleWatchOnly.v1', String(state.watchOnly)); refreshWatchlist();
 });
-import('./research.js?v=20260921a').then(({initResearch}) => {
+$('#show-screened').addEventListener('click', () => {
+  state.watchOnly=false; $('#watch-only').checked=false;
+  lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
+});
+import('./research.js?v=20260922c').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
-    snapshotJSON, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
+    snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
 
 const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {

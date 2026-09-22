@@ -94,10 +94,12 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
       if(opened===null||closed===null)return;
       if(!Array.isArray(opened?.data)||!Array.isArray(closed?.data))throw new Error('Invalid positions');
       const at=Date.now();
+      if(opened.data.some(p=>!Number.isFinite(Number(p.current_size))))throw new Error('Invalid position size');
       const open=opened.data.map(p=>normalizePosition(p,c,'OPEN',at,categorize))
         .filter(p=>Math.max(p.value_usd,p.cost_usd)>=50);
       const closedRows=closed.data.map(p=>normalizePosition(p,c,'CLOSED',at,categorize))
         .filter(p=>p.last_event_at>=at/1000-7*86400 && Math.max(p.cost_usd,Math.abs(p.realized_pnl))>=50);
+      state.research?.observePositions(c.wallet,open,closedRows,at);
       state.positions.open=[...state.positions.open.filter(p=>p.wallet!==c.wallet),...open];
       state.positions.recently_closed=[...state.positions.recently_closed.filter(p=>p.wallet!==c.wallet),...closedRows];
       walletChecks[c.wallet]={at,truncated:!!(opened.pagination?.next_cursor||closed.pagination?.next_cursor)};
@@ -111,8 +113,8 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
   function tick() {
     if(document.hidden)return;
     if(state.view==='soon')markets();
-    if(state.view==='positions') {
-      const focus=state.holdingWallet;
+    if(state.view==='positions' || state.view==='research') {
+      const focus=state.view==='positions' ? state.holdingWallet : '';
       let cards=state.whales.filter(c=>focus?c.wallet===focus:
         (state.watchOnly?state.watchlist.has(c.wallet):['CANDIDATE','WATCH','FRAGILE'].includes(c.verdict)));
       cards.sort((a,b)=>Number(dirtyWallets.has(b.wallet))-Number(dirtyWallets.has(a.wallet))

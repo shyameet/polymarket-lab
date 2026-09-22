@@ -1,0 +1,13 @@
+name = "whale-lab-refresh"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+workers_dev = false
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability]
+enabled = true
+
+# GITHUB_TOKEN must be installed with `wrangler secret put GITHUB_TOKEN`.
+# Fine-grained token: only shyameet/polymarket-lab, Actions: write.
