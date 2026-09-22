@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260922a">
+<link rel="stylesheet" href="style.css?v=20260922b">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -34,14 +34,14 @@
 
 <div id="src-panel" class="srcpanel" hidden>
   <p>
-    This page reads Polymarket straight from your browser. If your network can't
-    resolve <code>polymarket.com</code> that fails, and it falls back to a saved
-    snapshot. Paste a relay URL to get live data anyway.
+    This page uses Whale Lab's hosted relay for live trades, holdings and markets.
+    If the connection fails, it shows saved data with its original age.
+    You can use a different relay below or restore the default.
   </p>
   <div class="srcrow">
     <input id="relay" type="url" placeholder="https://polymarket-relay.you.workers.dev" spellcheck="false">
     <button id="relay-save" class="btn primary">Use relay</button>
-    <button id="relay-clear" class="btn">Clear</button>
+    <button id="relay-clear" class="btn">Use default relay</button>
   </div>
   <p class="tiny" id="src-status"></p>
   <p class="tiny">
@@ -173,7 +173,7 @@
 <section id="view-trades" class="view" hidden>
   <div class="controls">
     <div class="chips" id="t-chips">
-      <button class="chip active" data-who="best">Followed whales</button>
+      <button class="chip active" data-who="best">Top screened whales</button>
       <button class="chip" data-who="all">All screened</button>
       <button class="chip" data-who="everyone">Everyone</button>
     </div>
@@ -310,6 +310,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260922a" type="module"></script>
+<script src="app.js?v=20260922b" type="module"></script>
 </body>
 </html>

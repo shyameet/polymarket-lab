@@ -19,6 +19,13 @@ const setup = `const c = { wallet: '0x123', condition: 'condition-a', outcome: '
   key: posKey('0x123', '', '', 'Yes', 'condition-a'), addedAt: Math.floor(Date.now()/1000)-60 };
   state.copies = [c];`;
 
+test('ordinary visits use the hosted relay and explicit custom relays still work', () => {
+  const a = app();
+  assert.equal(a.run('relayUrl()'),'https://polymarket-relay.shyameet2.workers.dev');
+  a.run("location.search='?relay=https%3A%2F%2Fcustom.example%2F'");
+  assert.equal(a.run('relayUrl()'),'https://custom.example');
+});
+
 test('snapshot checks bypass cached URLs and skip unchanged JSON bodies', async () => {
   const calls = [];
   const a = app(async (url, options) => {

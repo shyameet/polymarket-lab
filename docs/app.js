@@ -242,10 +242,11 @@ const posKey = (wallet, slug, title, outcome, condition) => {
 
 /* ─────────────────────────── relay / source ─────────────────────────── */
 
+const DEFAULT_RELAY = 'https://polymarket-relay.shyameet2.workers.dev';
 const relayUrl = () => {
   const q = new URLSearchParams(location.search).get('relay');
   if (q) { lsSet('relay', q); return q.replace(/\/+$/, ''); }
-  return (lsGet('relay', '') || '').replace(/\/+$/, '');
+  return (lsGet('relay', '') || DEFAULT_RELAY).replace(/\/+$/, '');
 };
 
 function setSource(kind, detail) {
@@ -742,7 +743,11 @@ function renderTrades() {
     // one before -- "lower your min bet" was shown even with min bet already
     // at $0, whenever the real cause was the 2-minute window (nothing THAT
     // recent yet, not nothing big enough).
-    if (!state.trades.length) {
+    if (state.watchOnly && !state.watchlist.size) {
+      empty.textContent = 'Your watchlist is empty. Follow a whale or turn off “Only whales I follow”.';
+    } else if (state.source !== 'live') {
+      empty.textContent = 'Live trades are disconnected. Saved trades may be outside the two-minute window. Open data source to check the connection.';
+    } else if (!state.trades.length) {
       empty.textContent = state.source === 'live' ? 'Connected. Waiting for bets…' : 'Loading…';
     } else {
       const cutoff = Date.now() / 1000 - TRADE_VISIBLE_S;
@@ -1719,7 +1724,8 @@ $('#relay-save').addEventListener('click', () => {
 });
 $('#relay-clear').addEventListener('click', () => {
   try { localStorage.removeItem('relay'); } catch {}
-  location.reload();
+  const url = new URL(location.href); url.searchParams.delete('relay');
+  location.href = url.href;
 });
 
 $('#drawer-close').addEventListener('click', () => { $('#drawer').hidden = true; });
