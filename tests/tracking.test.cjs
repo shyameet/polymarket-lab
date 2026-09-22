@@ -8,7 +8,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../docs/app.js'), 'utf8');
 const definitions = source.slice(0, source.lastIndexOf('/*', source.indexOf('const VIEWS =')));
 function app(fetch = async () => { throw new Error('offline'); }) {
-  const ctx = vm.createContext({ console, Date, URL, URLSearchParams, AbortController,
+  const ctx = vm.createContext({ console, Date, URL, URLSearchParams, AbortController, AbortSignal,
     location: {search:''},
     setTimeout, clearTimeout, fetch, document: { querySelector: () => null },
     localStorage: { getItem: () => null, setItem() {} } });
@@ -18,6 +18,20 @@ function app(fetch = async () => { throw new Error('offline'); }) {
 const setup = `const c = { wallet: '0x123', condition: 'condition-a', outcome: 'Yes',
   key: posKey('0x123', '', '', 'Yes', 'condition-a'), addedAt: Math.floor(Date.now()/1000)-60 };
   state.copies = [c];`;
+
+test('snapshot checks bypass cached URLs and skip unchanged JSON bodies', async () => {
+  const calls = [];
+  const a = app(async (url, options) => {
+    calls.push({url,options});
+    return {ok:true,headers:{get:()=> 'revision-one'},json:async()=>({generated_at:123})};
+  });
+  assert.equal((await a.run("snapshotJSON('data/meta.json')")).generated_at,123);
+  assert.equal(await a.run("snapshotJSON('data/meta.json')"),null);
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].options.method,'HEAD');
+  assert.ok(calls.every(c=>c.url.startsWith('data/meta.json?refresh=')));
+  assert.ok(calls.every(c=>c.options.cache==='no-store'));
+});
 
 test('expired holdings and failed checks cannot show current prices', () => {
   const a = app(); a.run(setup);

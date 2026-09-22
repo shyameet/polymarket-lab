@@ -366,8 +366,8 @@ function onWsDead() {
     state.source = 'snapshot';
     refreshSourceLabel();
     $('#src-status').textContent =
-      "Couldn't reach Polymarket directly — usually a DNS block. Showing saved data "
-      + 'instead. Add a relay below, or set your DNS to 1.1.1.1, for live data.';
+      "The live trade connection failed. The browser cannot identify whether this is a network block, upstream outage or another connection problem. "
+      + 'Showing saved trades. Holdings and markets report their own connection status. A reachable relay may help.';
     if (!state.hintShown) { state.hintShown = true; $('#src-panel').hidden = false; }
     return;
   }
@@ -389,15 +389,16 @@ async function snapshotJSON(path) {
   if (snapshotBusy.has(path)) return null;
   snapshotBusy.add(path);
   try {
+    const requestPath = `${path}?refresh=${Date.now()}`;
     const previous = snapshotVersions.get(path);
     // Lightweight revision check: don't parse multi-megabyte JSON every second.
     if (previous) {
-      const head = await fetch(path, { method:'HEAD', cache:'no-cache', signal:AbortSignal.timeout(8000) });
+      const head = await fetch(requestPath, { method:'HEAD', cache:'no-store', signal:AbortSignal.timeout(8000) });
       if (!head.ok) throw new Error(`Snapshot HTTP ${head.status}`);
       const version = head.headers.get('etag') || head.headers.get('last-modified');
       if (version && version === previous) return null;
     }
-    const r = await fetch(path, {cache:'no-cache',signal:AbortSignal.timeout(8000)});
+    const r = await fetch(requestPath, {cache:'no-store',signal:AbortSignal.timeout(8000)});
     if (!r.ok) throw new Error(`Snapshot HTTP ${r.status}`);
     const data = await r.json();
     const version = r.headers.get('etag') || r.headers.get('last-modified');
@@ -1023,7 +1024,10 @@ function renderMarketsSoon() {
   list.textContent = '';
   if (!rows.length) {
     empty.hidden = false;
-    empty.textContent = 'Nothing open in this window right now.';
+    const receivedAt = state.liveRefresh?.marketChecks[state.marketsBucket]?.at || 0;
+    empty.textContent = receivedAt && Date.now() - receivedAt < 15_000
+      ? 'No matching markets returned by the latest API check (up to 40 sampled).'
+      : 'Current markets are unavailable. The saved sample has no unexpired markets; this does not mean no markets are open. Live connection required.';
     return;
   }
   empty.hidden = true;
