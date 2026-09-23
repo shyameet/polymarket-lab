@@ -73,6 +73,9 @@ const isWatched = wallet => state.watchlist.has((wallet || '').toLowerCase());
 function refreshWatchlist() {
   const count = $('#watch-count');
   if (count) count.textContent = `${state.watchlist.size} followed`;
+  // The one-click way out of an empty personal filter only matters while it's on.
+  const showAll = $('#show-screened');
+  if (showAll) showAll.hidden = !state.watchOnly;
   renderBoard(); state.dirty = true; state.tapeForce = true;
   if (state.view === 'positions') renderPositions();
   if (state.view === 'soon') renderMarketsSoon();
@@ -1720,24 +1723,82 @@ function renderMethod() {
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
 const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research'];
-document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('.segbtn').forEach((x) => x.classList.remove('active'));
-  b.classList.add('active');
-  state.view = b.dataset.view;
-  VIEWS.forEach((v) => { $(`#view-${v}`).hidden = state.view !== v; });
-  if (state.view === 'trades') state.dirty = true;
-  if (state.view === 'positions') renderPositions();
-  if (state.view === 'mine') { renderMine(); pollAllCopies(); }
-  if (state.view === 'soon') renderMarketsSoon();
-  if (state.view === 'flows') renderCryptoFlows();
-  if (state.view === 'research') state.research?.render();
+// Seven views grouped into four sections. Closing soon is the default landing:
+// it's the owner's stated main use, and it's always populated, where the live
+// tape can open on an empty two-minute window.
+const TAB_OF = { soon: 'markets', flows: 'markets', trades: 'live', positions: 'live',
+  whales: 'whales', research: 'whales', mine: 'mine' };
+const lastViewOfTab = { markets: 'soon', live: 'trades', whales: 'whales', mine: 'mine' };
+
+function showView(view) {
+  if (!TAB_OF[view]) view = 'soon';
+  const tab = TAB_OF[view];
+  lastViewOfTab[tab] = view;
+  state.view = view;
+  lsSet('whaleLab.view', view);
+  document.querySelectorAll('.tab').forEach((b) => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  let subs = 0;
+  document.querySelectorAll('.sub').forEach((b) => {
+    const inTab = b.dataset.tab === tab;
+    b.hidden = !inTab;
+    if (inTab) subs += 1;
+    b.classList.toggle('active', b.dataset.view === view);
+    b.setAttribute('aria-selected', String(b.dataset.view === view));
+  });
+  $('#subnav').hidden = subs < 2;
+  $('#follow-toggle').hidden = view === 'flows' || view === 'mine';
+  VIEWS.forEach((v) => { $(`#view-${v}`).hidden = view !== v; });
+  if (view === 'trades') { state.dirty = true; state.tapeForce = true; }
+  if (view === 'positions') renderPositions();
+  if (view === 'mine') { renderMine(); pollAllCopies(); }
+  if (view === 'soon') renderMarketsSoon();
+  if (view === 'flows') renderCryptoFlows();
+  if (view === 'research') state.research?.render();
+  paintFreshness();
   state.liveRefresh?.tick();
+}
+document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => {
+  showView(lastViewOfTab[b.dataset.tab]);
+  window.scrollTo({ top: 0 });
 }));
+document.querySelectorAll('.sub').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
+
+// One short line with a coloured dot instead of a four-line paragraph; the full
+// caveat stays available as the hover title and in each view's "about" note.
+const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers' };
+function paintFreshness() {
+  const box = $('#section-freshness');
+  if (!box) return;
+  let text, level, title;
+  if (SNAPSHOT_VIEWS[state.view]) {
+    const ts = { whales: state.meta?.generated_at, research: state.insights?.generated_at,
+      flows: state.cryptoFlows?.generated_at }[state.view];
+    const age = ts ? Date.now() / 1000 - ts : Infinity;
+    level = age < 1800 ? 'ok' : age < 4 * 3600 ? 'stale' : 'old';
+    text = ts ? `${SNAPSHOT_VIEWS[state.view]} updated ${ago(ts)} ago` : 'Loading saved data…';
+    title = 'Computed by the pipeline on GitHub, not live. Checked for a newer copy every second while this view is open.';
+  } else if (state.view === 'trades') {
+    level = state.source === 'live' ? 'ok' : 'old';
+    text = state.source === 'live' ? 'Live trade feed' : 'Live feed offline · showing saved trades';
+    title = 'Trades arrive over the live websocket. Saved-data fallback keeps its original age.';
+  } else {
+    level = 'ok';
+    text = 'Live · refreshing while this view is open';
+    title = 'Direct API refresh targets one second. Slow requests, upstream delays and rate limits can extend it; each row shows its own age.';
+  }
+  box.textContent = text;
+  box.title = title;
+  box.className = `fresh-line ${level}`;
+}
 
 $('#holding-wallet').addEventListener('change', e => {
   state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
 });
-import('./live.js?v=20260923a').then(({initLive}) => {
+import('./live.js?v=20260923b').then(({initLive}) => {
   state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
     renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
   state.liveRefresh.tick();
@@ -1746,6 +1807,7 @@ import('./live.js?v=20260923a').then(({initLive}) => {
 loadWatchlist();
 $('#watch-only').checked = state.watchOnly;
 $('#watch-count').textContent = `${state.watchlist.size} followed`;
+$('#show-screened').hidden = !state.watchOnly;
 $('#watch-only').addEventListener('change', e => {
   state.watchOnly = e.target.checked;
   lsSet('whaleWatchOnly.v1', String(state.watchOnly)); refreshWatchlist();
@@ -1754,7 +1816,7 @@ $('#show-screened').addEventListener('click', () => {
   state.watchOnly=false; $('#watch-only').checked=false;
   lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
 });
-import('./research.js?v=20260923a').then(({initResearch}) => {
+import('./research.js?v=20260923b').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
@@ -1872,14 +1934,7 @@ setInterval(() => {
   if (state.view === 'soon') renderMarketsSoon();
   if (state.view === 'positions') renderPositionStats();
   state.liveRefresh?.tick();
-  const historical = {whales:state.meta?.generated_at,research:state.insights?.generated_at,
-    flows:state.cryptoFlows?.generated_at};
-  const stamp=historical[state.view];
-  $('#section-freshness').textContent=stamp
-    ? `Checking for new snapshots every second while this section is open · source generated ${ago(stamp)} ago. Historical scores and research are computed by the pipeline, not the live trade socket.`
-    : state.view==='positions'||state.view==='soon'||state.view==='mine'
-      ? 'Direct API refresh targets one second. Slow requests, upstream delays and rate limits can extend it; saved data keeps its original age.'
-      : 'Trade tape uses the live websocket when connected. Saved-data fallback retains its original age.';
+  paintFreshness();
 }, 1000);
 
 setInterval(() => {
@@ -1900,6 +1955,7 @@ setInterval(() => { if (!document.hidden && state.copies.length) pollAllCopies()
 
 loadCopies();
 updateMineBadge();
+showView(lsGet('whaleLab.view', 'soon'));
 loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);
 if (state.copies.length) pollAllCopies();
 loadMarketsSoon();

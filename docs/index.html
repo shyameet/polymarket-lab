@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260923a">
+<link rel="stylesheet" href="style.css?v=20260923b">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -50,30 +50,50 @@
   </p>
 </div>
 
-<nav class="seg" role="tablist">
-  <button class="segbtn active" data-view="whales" role="tab">Who to follow</button>
-  <button class="segbtn" data-view="research" role="tab">Whale research</button>
-  <button class="segbtn" data-view="soon" role="tab">Closing soon</button>
-  <button class="segbtn" data-view="trades" role="tab">Live buys</button>
-  <button class="segbtn" data-view="positions" role="tab">What they hold</button>
-  <button class="segbtn" data-view="mine" role="tab">My copies<span id="mine-badge" class="badge" hidden>0</span></button>
-  <button class="segbtn" data-view="flows" role="tab">Crypto flows</button>
+<!-- Four sections, not seven. On phones this becomes a bottom tab bar, so the
+     first screen shows data instead of navigation. -->
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button class="tab" data-tab="markets" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span>Markets</span></button>
+  <button class="tab" data-tab="live" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+    <span>Live</span></button>
+  <button class="tab" data-tab="whales" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>
+    <span>Whales</span></button>
+  <button class="tab" data-tab="mine" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+    <span>Mine</span><span id="mine-badge" class="badge" hidden>0</span></button>
 </nav>
 
-<div class="watchbar">
-  <label><input type="checkbox" id="watch-only"> Only whales I follow</label>
-  <span id="watch-count" class="tiny">0 followed</span>
-  <span class="tiny">Saved in this browser · filters boards, whale trades and holdings</span>
-  <button id="show-screened" class="btn small">Show all screened whales</button>
+<div class="subnav" id="subnav" role="tablist" aria-label="Views">
+  <button class="sub" data-tab="markets" data-view="soon" role="tab" type="button">Closing soon</button>
+  <button class="sub" data-tab="markets" data-view="flows" role="tab" type="button">Crypto flows</button>
+  <button class="sub" data-tab="live" data-view="trades" role="tab" type="button">Trades</button>
+  <button class="sub" data-tab="live" data-view="positions" role="tab" type="button">Holdings &amp; exits</button>
+  <button class="sub" data-tab="whales" data-view="whales" role="tab" type="button">Who to follow</button>
+  <button class="sub" data-tab="whales" data-view="research" role="tab" type="button">Topic research</button>
 </div>
 
-<p id="section-freshness" class="watchbar tiny" aria-live="off"></p>
+<div class="toolbar">
+  <p id="section-freshness" class="fresh-line" aria-live="off"></p>
+  <span class="follow" id="follow-toggle">
+    <label class="follow-toggle" title="Saved in this browser. Filters boards, whale trades and holdings.">
+      <input type="checkbox" id="watch-only"> ★ Only whales I follow
+      <span id="watch-count" class="count">0 followed</span></label>
+    <button id="show-screened" class="btn small" type="button" hidden>Show all screened whales</button>
+  </span>
+</div>
 
 <section id="view-research" class="view" hidden>
-  <h2>Find specialists. Follow their changes.</h2>
   <p class="hint" id="research-status">Loading research…</p>
   <h3>Topic leaderboards</h3>
-  <p class="hint">Ranked by realized profit within the selected topic, among screened whales. Each whale's 200 most recent closed positions — a recent sample, not lifetime topic performance, and not picked by result. Open losses are not included. Topic labels are inferred from market text.</p>
+  <details class="about">
+    <summary>Who makes money in each topic — from recent settled bets, not picked by result</summary>
+    <div class="about-body">Ranked by realized profit within the selected topic, among screened whales. Each whale's most recent settled positions — sold, redeemed, or resolved at $0 and never redeemed — up to 200. A recent sample, not lifetime topic performance, and not picked by result. Losses on positions
+      still open are not included. Topic labels are inferred from market text.</div>
+  </details>
   <div class="controls">
     <label>Topic <select id="research-topic">
       <option value="weather">Weather</option><option value="politics">Politics</option>
@@ -84,29 +104,42 @@
     </select></label>
     <label><input type="checkbox" id="research-qualified" checked> Consistency screen only</label>
   </div>
-  <details class="hint"><summary>How the screen and specialist badges work</summary>
-    At least 20 distinct closed markets, positive sampled profit, results across at least 3 closing months,
+  <details class="about"><summary>How the screen and specialist badges work</summary><div class="about-body">
+    At least 20 distinct settled markets, positive sampled profit, results across at least 3 months,
     60% of those months positive, and no single market providing over 35% of gross winning profit.
     A specialist also has at least 60% of sampled cost in this topic. These are screening rules, not proof of future skill.
-  </details>
+  </div></details>
   <ul id="topic-board" class="research-grid"></ul>
   <h3>Conviction tracker</h3>
-  <p class="hint">Net share changes between successive observations. While Research or Holdings is open, live API checks rotate through whales and compare successful responses. Browser observations are session-only; saved history comes from the pipeline. Adds and reductions describe inventory, not intent; missing positions never prove an exit.</p>
+  <details class="about">
+    <summary>Who is adding to or trimming a position — inventory changes, not intent</summary>
+    <div class="about-body">Net share changes between successive observations. While Research or
+      Holdings is open, live API checks rotate through whales and compare successful responses.
+      Browser observations are session-only; saved history comes from the pipeline. Adds and
+      reductions describe inventory, not intent; missing positions never prove an exit.</div>
+  </details>
   <p id="conviction-status" class="hint"></p>
   <ul id="conviction-feed" class="research-grid"></ul>
   <h3>Followability &amp; holding profiles</h3>
-  <p class="hint">Followability checks whether $25 can still be bought within 2¢ of the whale’s fill, one minute after this browser sees a fresh live buy. Only followed whales are sampled, at most once per whale every 5 minutes. Keep this page open. The score requires 10 measured checks; failed checks are reported separately. Displayed depth is not a guaranteed fill, and fees are excluded.</p>
-  <p class="hint">Observation spans are not exact holding times: gaps can hide close/reopen cycles. Quick trading and holding until settlement require entry and exit-reason history that the current snapshots cannot establish.</p>
+  <details class="about">
+    <summary>Could you still buy near the whale's price a minute later?</summary>
+    <div class="about-body">Followability checks whether $25 can still be bought within 2¢ of the
+      whale’s fill, one minute after this browser sees a fresh live buy. Only followed whales are
+      sampled, at most once per whale every 5 minutes. Keep this page open. The score requires 10
+      measured checks; failed checks are reported separately. Displayed depth is not a guaranteed
+      fill, and fees are excluded. Observation spans are not exact holding times: gaps can hide
+      close/reopen cycles.</div>
+  </details>
   <p id="followability-status" class="tiny"></p>
   <ul id="whale-profiles" class="research-grid"></ul>
 </section>
 
 <!-- ───────────────────────── WHO TO FOLLOW ───────────────────────── -->
-<section id="view-whales" class="view">
+<section id="view-whales" class="view" hidden>
   <p class="hint" id="w-intro"></p>
 
   <div class="controls">
-    <div class="chips" id="w-chips">
+    <div class="chips scroller" id="w-chips">
       <button class="chip active" data-v="good">Worth following</button>
       <button class="chip" data-v="CANDIDATE">Best only</button>
       <button class="chip" data-v="FRAGILE">Risky</button>
@@ -115,7 +148,7 @@
     </div>
   </div>
   <div class="controls">
-    <div class="chips" id="w-cat-chips">
+    <div class="chips scroller" id="w-cat-chips">
       <button class="chip active" data-cat="">All markets</button>
       <button class="chip" data-cat="crypto">Crypto</button>
       <button class="chip" data-cat="sports">Sports</button>
@@ -148,15 +181,19 @@
 </section>
 
 <!-- ───────────────────────────── CLOSING SOON ───────────────────────────── -->
-<section id="view-soon" class="view" hidden>
-  <p id="markets-live-status" class="hint">Connecting to the market API…</p>
-  <div class="callout">
-    <b>Upcoming markets, grouped by how soon they close.</b> Up to 40 markets per window. Whale-independent —
-    this is what can be traded right now. All times are UTC, not IST or ET.
-  </div>
+<section id="view-soon" class="view">
+  <details class="about">
+    <summary>Markets by closing time, most-traded first — with any followed whale's bets on each</summary>
+    <div class="about-body">
+      Up to 40 open markets per window, refreshed straight from the market API while this view is open.
+      Windows are cut in <b>UTC</b>: "end of today" is UTC midnight, which is 5:30 AM IST.
+      A whale bet shown on a card is an observed fill, not a recommendation.
+      <p id="markets-live-status" class="tiny">Connecting to the market API…</p>
+    </div>
+  </details>
 
   <div class="controls">
-    <div class="chips" id="soon-chips">
+    <div class="chips scroller" id="soon-chips">
       <button class="chip active" data-bucket="hours">Next few hours</button>
       <button class="chip" data-bucket="today">By end of today</button>
       <button class="chip" data-bucket="weekend">By the weekend</button>
@@ -174,37 +211,38 @@
 <!-- ───────────────────────────── LIVE BUYS ───────────────────────────── -->
 <section id="view-trades" class="view" hidden>
   <div class="controls">
-    <div class="chips" id="t-chips">
-      <button class="chip active" data-who="best">Top screened whales</button>
+    <div class="chips seg-chips" id="t-chips">
+      <button class="chip active" data-who="best">Top whales</button>
       <button class="chip" data-who="all">All screened</button>
       <button class="chip" data-who="everyone">Everyone</button>
     </div>
-    <label class="minlbl">Min bet $
-      <input type="number" id="t-min" value="0" min="0" step="50">
-    </label>
-    <label class="minlbl">My stake $
-      <input type="number" id="t-stake" value="25" min="1" step="5">
-    </label>
-    <button id="pause" class="btn">Pause</button>
-  </div>
-  <div class="controls">
-    <div class="chips" id="t-cat-chips">
-      <button class="chip active" data-cat="">All topics</button>
-      <button class="chip" data-cat="politics">Politics</button>
-      <button class="chip" data-cat="weather">Weather</button>
-      <button class="chip" data-cat="csgo">CS:GO</button>
-      <button class="chip" data-cat="valorant">Valorant</button>
-      <button class="chip" data-cat="esports">Esports (other)</button>
-      <button class="chip" data-cat="sports">Sports</button>
-      <button class="chip" data-cat="crypto">Crypto</button>
-      <button class="chip" data-cat="macro">Macro</button>
+    <div class="inline-inputs">
+      <label class="minlbl">Min $<input type="number" id="t-min" value="0" min="0" step="50" inputmode="numeric"></label>
+      <label class="minlbl">Stake $<input type="number" id="t-stake" value="25" min="1" step="5" inputmode="numeric"></label>
+      <button id="pause" class="btn small" type="button">Pause</button>
     </div>
   </div>
+  <div class="chips scroller" id="t-cat-chips">
+    <button class="chip active" data-cat="">All topics</button>
+    <button class="chip" data-cat="politics">Politics</button>
+    <button class="chip" data-cat="weather">Weather</button>
+    <button class="chip" data-cat="csgo">CS:GO</button>
+    <button class="chip" data-cat="valorant">Valorant</button>
+    <button class="chip" data-cat="esports">Esports (other)</button>
+    <button class="chip" data-cat="sports">Sports</button>
+    <button class="chip" data-cat="crypto">Crypto</button>
+    <button class="chip" data-cat="macro">Macro</button>
+  </div>
 
-  <p class="hint">Newest first; each bet drops off after 2 minutes. The list holds
-    still while your pointer is on it or you're scrolled into it, so a tap can't land on
-    the wrong bet — new ones wait in a banner. Tap a name for their record, or
-    <b>⚡ Copy this</b> to track that you took the same bet.</p>
+  <details class="about">
+    <summary>Newest first · each bet drops off after 2 minutes · the list holds still while you use it</summary>
+    <div class="about-body">
+      While your pointer is on the list, you've just touched it, or you're scrolled into it,
+      new bets wait in a banner instead of pushing rows around — so a tap can't land on the
+      wrong bet. Tap a name for their record, or <b>⚡ Copy this</b> to track that you took
+      the same bet. Nothing is ever traded for you.
+    </div>
+  </details>
 
   <div class="tapehold-slot">
     <div id="tape-hold" class="tapehold" role="status" aria-live="polite" hidden>
@@ -218,17 +256,20 @@
 
 <!-- ──────────────────────── WHAT THEY HOLD ──────────────────────── -->
 <section id="view-positions" class="view" hidden>
-  <div class="callout">
-    <b>Whale holdings and confirmed exits.</b>
-    Live API refreshes run while this section is open. Pick one whale for focused updates;
-    all-whale mode rotates through the list. Holdings are capped samples, not every position.
-    If the API is unreachable, saved rows retain their original timestamps.
-  </div>
+  <details class="about">
+    <summary>What followed whales hold now, and what they just got out of</summary>
+    <div class="about-body">
+      Refreshed from the positions API while this view is open. All-whale mode rotates through
+      the list a few whales at a time; pick one whale for focused updates. Holdings are capped
+      samples, not every position, and markets that have already resolved are left out.
+      If the API is unreachable, saved rows keep their original timestamps.
+      <p id="holdings-live-status" class="tiny">Connecting to the positions API…</p>
+    </div>
+  </details>
 
-  <div class="controls"><label>Live holdings for
+  <div class="controls"><label class="minlbl">Whale
     <select id="holding-wallet"><option value="">All screened whales (rotating)</option></select>
   </label></div>
-  <p id="holdings-live-status" class="hint">Connecting to the positions API…</p>
 
   <div class="controls">
     <div class="chips" id="p-chips">
@@ -238,7 +279,7 @@
     </div>
   </div>
   <div class="controls">
-    <div class="chips" id="p-cat-chips">
+    <div class="chips scroller" id="p-cat-chips">
       <button class="chip active" data-cat="">All topics</button>
       <button class="chip" data-cat="politics">Politics</button>
       <button class="chip" data-cat="weather">Weather</button>
@@ -259,15 +300,16 @@
 
 <!-- ───────────────────────────── MY COPIES ───────────────────────────── -->
 <section id="view-mine" class="view" hidden>
-  <div class="callout warn">
-    <b>Positions you've copied.</b> Your notebook is saved in this browser only. Public whale and market IDs are
-    queried at Polymarket; no trade is ever placed for you. Each one is checked directly
-    against Polymarket on a one-second refresh loop, with slower retries on failure. API responses may still lag;
-    saved snapshots may be much older. Exit alerts are delayed
-    observations, not instant execution signals. Keep this page open for checks and alerts. It
-    does not tell you that getting out is the right move — see
-    <a href="#" id="mine-method-link">how this works</a>.
-  </div>
+  <details class="about warn">
+    <summary>Your copied positions — saved in this browser only; exit alerts can lag</summary>
+    <div class="about-body">
+      No trade is ever placed for you; public whale and market IDs are checked at Polymarket
+      on a one-second loop, with slower retries on failure. API responses can still lag and
+      saved snapshots may be much older, so exit alerts are delayed observations, not instant
+      execution signals. Keep this page open for checks and alerts. It does not tell you that
+      getting out is the right move — see <a href="#" id="mine-method-link">how this works</a>.
+    </div>
+  </details>
 
   <div id="mine-alerts"></div>
   <div id="mine-stats" class="statrow"></div>
@@ -282,20 +324,21 @@
   <ul id="mine" class="tape"></ul>
   <p id="mine-empty" class="empty">
     You haven't copied anything yet.<br>
-    Go to <b>Live buys</b> or <b>What they hold</b> and press <b>⚡ Copy this</b> on a
+    In <b>Live → Trades</b> or <b>Live → Holdings</b>, press <b>⚡ Copy this</b> on a
     bet you've taken. This page will then check the whale’s position for you, subject to API delays.
   </p>
 </section>
 
 <!-- ───────────────────────────── CRYPTO FLOWS ───────────────────────────── -->
 <section id="view-flows" class="view" hidden>
-  <div class="callout warn">
-    <b>Large USDT/USDC transfers on Ethereum — not a Polymarket trade, and nothing here
-    can be copied.</b> A wallet moving funds might precede a sale, might be a treasury
-    rebalance, might be nothing at all. Read this as a heads-up about where money is
-    moving, not a signal to act on. Public on-chain data, refreshed alongside everything
-    else.
-  </div>
+  <details class="about warn">
+    <summary>Large USDT/USDC moves on Ethereum — not a Polymarket trade; nothing here can be copied</summary>
+    <div class="about-body">
+      A wallet moving funds might precede a sale, might be a treasury rebalance, might be
+      nothing at all. Read this as a heads-up about where money is moving, not a signal to act
+      on. Public on-chain data, refreshed alongside everything else.
+    </div>
+  </details>
 
   <div id="flows-stats" class="statrow"></div>
 
@@ -319,6 +362,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260923a" type="module"></script>
+<script src="app.js?v=20260923b" type="module"></script>
 </body>
 </html>
