@@ -251,9 +251,11 @@ def _activity(wallet: str, start: int, end: int) -> tuple[list[dict], bool]:
 
 
 def _market(condition: str) -> dict | None:
-    """CLOB market state: token -> {price, winner}. The Gamma batch lookup is NOT
-    used: verified 2026-09-23, /markets/keyset with repeated condition_ids returns
-    ONE market however many ids are passed, so batched lookups silently drop the rest."""
+    """CLOB market state: token -> {price, winner}, keyed by the token id that
+    activity rows carry as `asset`. One market per request. (Not because Gamma
+    cannot batch: an earlier note here said /markets/keyset returns ONE market for
+    any number of condition_ids, but that was the relay dropping repeated params --
+    see feed._end_dates.)"""
     try:
         m = api._get(api.CLOB, f"/markets/{condition}", retries=2, timeout=20)
     except api.PolymarketError:

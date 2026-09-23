@@ -1,9 +1,12 @@
+import json
+import math
 import sys
 import unittest
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'pipeline'))
-from pm import positions
+from pm import feed, positions
 from pm.score import score_wallet
 from pm.positions import _normalize
 
@@ -75,6 +78,40 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual({p['condition'] for p in out['open']}, {'live'})
         self.assertEqual(set(out['topic_profiles']), {'0xok'})
         self.assertEqual(out['coverage']['closed_failed'], 1)
+
+    # Gamma answers a whole batch of REPEATED condition_ids in one call, but
+    # closed=false drops a market once it resolves, so dates need both passes.
+    # (Through the relay the batch looks like ONE market: it keeps only the last
+    # value of a repeated param. That is the relay, not Gamma.)
+    def test_every_feed_condition_gets_its_end_date(self):
+        markets = {f'0x{i:064x}': (i % 3 == 0, f'2026-10-{i % 28 + 1:02d}T12:00:00Z')
+                   for i in range(120)}   # id -> (resolved?, endDate)
+        combo = 'f' * 64                  # synthetic parlay id: no market, no date
+        urls = []
+
+        class Reply:
+            def __init__(self, body): self.body = json.dumps(body).encode()
+            def read(self): return self.body
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+
+        def gamma(req, timeout=None):
+            urls.append(req.full_url)
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)
+            closed = q['closed'] == ['true']
+            return Reply({'markets': [{'conditionId': c, 'endDate': markets[c][1]}
+                                      for c in q.get('condition_ids', [])
+                                      if c in markets and markets[c][0] == closed]})
+
+        original = feed.api.urllib.request.urlopen
+        feed.api.urllib.request.urlopen = gamma
+        try:
+            out = feed._end_dates(set(markets) | {combo}, log=lambda *_: None)
+        finally:
+            feed.api.urllib.request.urlopen = original
+        self.assertEqual(out, {c: end for c, (_, end) in markets.items()})
+        # one request per batch of ids, per closed state -- not one per market
+        self.assertEqual(len(urls), 2 * math.ceil((len(markets) + 1) / feed._END_DATE_BATCH))
 
 
 if __name__ == '__main__':

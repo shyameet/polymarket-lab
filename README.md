@@ -83,10 +83,10 @@ keep arriving after a day ends; older days stay as written. `index.json` feeds t
 calendar. Every win rate is shown beside its **price baseline** (a no-skill buyer
 who pays 80¢ wins ~80% of the time), because a high win rate on favourites is not
 skill. The Recap tab also pulls trades made since the last run, live, through the
-relay. Traps found building it, both verified 2026-09-23: Gamma's
-`/markets/keyset` with repeated `condition_ids` returns ONE market whatever the
-count (so market state comes from the CLOB per condition), and combos/parlays carry
-a synthetic 64-character condition id with no CLOB market behind it.
+relay. Market state comes from the CLOB, one condition per request, because it
+carries each token's price and winner flag. A trap found building it, verified
+2026-09-23: combos/parlays carry a synthetic 64-character condition id with no CLOB
+market behind it.
 
 ### Run locally
 
@@ -117,7 +117,14 @@ Everything below was verified live against production, not read from the docs.
 - Gamma silently clamps `limit` to 100 and silently **ignores `active=`** — it is
   not a tradability flag. Use `acceptingOrders`.
 - Gamma `/markets` and `/events` are deprecated (`sunset: 2026-05-01`, already
-  past). Use `/markets/keyset`.
+  past). Use `/markets/keyset`. It takes `condition_ids` as a **repeated** param
+  and returns every match in one call, up to its 100-row page (a comma-joined
+  value matches nothing).
+- **Our relay keeps only the LAST value of a repeated query param**
+  (`worker/src/index.js` copies the query with `searchParams.set`). Through it,
+  `/markets/keyset` looks like it returns ONE market however many `condition_ids`
+  are sent; called directly it returns them all. Test repeated-param queries
+  against the API itself, not the relay.
 - `/v2/user-pnl` defaults to 1h fidelity → ~10MB per active wallet. Pass
   `fidelity=1d` (~450KB).
 - `entry_cost_usdc` is the basis of what is **still held** and collapses to 0 on

@@ -113,6 +113,14 @@ def _end_dates(conditions: set[str], *, log) -> dict[str, str]:
     Also verified live: /markets/keyset takes condition_ids as a REPEATED
     query param (?condition_ids=a&condition_ids=b) -- a comma-joined single
     value silently matches nothing.
+
+    Re-verified 2026-09-23 after a report that this batch returns ONE market
+    however many ids are sent. Called directly it returns them all: 3 ids ->
+    3 markets, and that day's run found 212 of its 227 markets -- every one
+    but the 15 combos, whose synthetic ids have no market. The one-market
+    result only happens THROUGH the Cloudflare relay: worker/src/index.js
+    copies the query with searchParams.set(), which keeps just the LAST value
+    of a repeated param. Test this against Gamma directly, never via the relay.
     """
     out: dict[str, str] = {}
     ids = sorted(conditions)
