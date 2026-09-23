@@ -64,3 +64,23 @@ test('refresh ticks never overlap market requests',async()=>{
     assert.ok(live.marketChecks.hours.at);
   }finally{global.fetch=oldFetch;global.document=oldDocument;}
 });
+// CLOSED positions default to realized-PnL descending: an unsorted page is the
+// whale's biggest winners, which hid nearly every losing exit.
+test('closed-position requests ask newest-first, open requests keep the default',async()=>{
+  const {initLive}=await ready;
+  const oldFetch=global.fetch,oldDocument=global.document;
+  const urls=[];
+  global.document={hidden:false,querySelector:()=>null};
+  global.fetch=async(u)=>{urls.push(new URL(u));return {ok:true,json:async()=>({data:[]})};};
+  try{
+    const state={view:'positions',whales:[{wallet:'0xabc',verdict:'CANDIDATE'}],
+      positions:{open:[],recently_closed:[]},watchlist:new Set()};
+    initLive({state,relayURL:()=>'',categorize:()=>'',renderPositions(){},renderMarkets(){},checkCopies(){}}).tick();
+    await new Promise(r=>setImmediate(r));
+    const closed=urls.find(u=>u.searchParams.get('status')==='CLOSED');
+    const open=urls.find(u=>u.searchParams.get('status')==='OPEN');
+    assert.equal(closed.searchParams.get('sort_by'),'TIMESTAMP');
+    assert.equal(closed.searchParams.get('sort_direction'),'DESC');
+    assert.equal(open.searchParams.get('sort_by'),null);
+  }finally{global.fetch=oldFetch;global.document=oldDocument;}
+});

@@ -194,16 +194,26 @@ def user_pnl(wallet: str, interval: str = "max", fidelity: str = "1d") -> list[d
 
 
 def user_positions(wallet: str, *, cap: int | None = None,
-                   status: str | None = None) -> list[dict]:
+                   status: str | None = None, sort_by: str | None = None,
+                   sort_direction: str | None = None) -> list[dict]:
     """Positions with realized/unrealized split.
 
     COST-BASIS TRAP: `entry_cost_usdc` is the basis of what is STILL HELD
     (avg_price * current_size) and collapses to 0 once a position is fully
     exited. It is useless as a lifetime denominator and is zero on most CLOSED
     rows. Lifetime cost = total_size * avg_price.
+
+    SORT TRAP (verified live 2026-09-23): CLOSED positions default to
+    REALIZED-PnL DESCENDING. A capped CLOSED sample is therefore the wallet's
+    top-N WINNERS -- two prolific wallets came back 200/200 profitable, while
+    their latest 60 by time were 43/60. Anything that samples CLOSED rows
+    must pass sort_by="TIMESTAMP", sort_direction="DESC" to get a sample that
+    wasn't selected on the outcome. TIMESTAMP and REALIZED_PNL are accepted;
+    LAST_EVENT_AT / CREATED_AT / UPDATED_AT return HTTP 400.
     """
     return list(_paginate("/v2/positions",
-                          {"user": wallet, "status": status, "include_pnl": True},
+                          {"user": wallet, "status": status, "include_pnl": True,
+                           "sort_by": sort_by, "sort_direction": sort_direction},
                           cap=cap))
 
 

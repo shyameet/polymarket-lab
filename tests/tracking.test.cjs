@@ -98,3 +98,15 @@ test('HTML payloads are escaped and invalid copy stakes are rejected', () => {
   assert.equal(a.run(`addCopy({price:0.5,stake:-25})`),false);
   assert.equal(a.run(`addCopy({price:0,stake:25})`),false);
 });
+// Seen live: bot wallets trading $0.01 of a token the socket sends with a
+// blank title/condition/outcome rendered as `BOUGHT "?"` cards (~19% of tape).
+test('fills with no market title are dropped instead of rendered as "?" cards', () => {
+  const a=app();
+  const blank=a.run(`addTrade({proxyWallet:'0xbot',side:'BUY',size:5,price:0.002,title:'',
+    conditionId:'',outcome:'',timestamp:1,transactionHash:'0x1'},true)`);
+  const real=a.run(`addTrade({proxyWallet:'0xw',side:'BUY',size:10,price:0.5,
+    title:'Will it rain in Mumbai?',conditionId:'c1',outcome:'Yes',timestamp:2,transactionHash:'0x2'},true)`);
+  assert.equal(blank,false);
+  assert.equal(real,true);
+  assert.equal(a.run('state.trades.length'),1);
+});

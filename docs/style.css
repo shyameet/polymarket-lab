@@ -258,6 +258,17 @@ code{font-family:var(--mono);font-size:.9em;color:var(--orange);background:#1a1a
 }
 .actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;padding-top:6px}
 
+/* Zero-height sticky slot: the banner floats over the tape instead of taking
+   layout space, so its appearing can't push rows under the pointer -- which
+   is the exact misclick the hold exists to prevent. */
+.tapehold-slot{position:sticky;top:10px;height:0;z-index:6}
+.tapehold{position:absolute;left:50%;top:0;transform:translateX(-50%);
+  width:max-content;max-width:calc(100% - 16px);display:flex;align-items:center;gap:12px;
+  background:var(--card2);border:1px solid var(--orange);color:var(--fg);
+  border-radius:999px;padding:7px 8px 7px 16px;font-size:14px;
+  box-shadow:0 6px 22px rgba(0,0,0,.45)}
+.tapehold[hidden]{display:none}
+
 /* whale fills cross-referenced onto a closing-soon market -- "is anyone
    worth following already on this one, and which side" */
 .whalebets{grid-column:1/-1;margin-top:2px;padding-top:10px;border-top:1px solid var(--line2)}

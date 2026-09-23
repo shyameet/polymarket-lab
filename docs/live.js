@@ -89,8 +89,11 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
     if(busy.has(key)||Date.now()<(retry.get(key)||0))return;
     busy.add(key);
     try {
+      // CLOSED defaults to realized-PnL descending, so an unsorted page is the
+      // whale's biggest winners and a losing exit never shows up; ask newest first.
       const [opened,closed]=await Promise.all(['OPEN','CLOSED'].map(status=>request(key+status,'data','/v2/positions',{
-        user:c.wallet,status,include_pnl:true,limit:100})));
+        user:c.wallet,status,include_pnl:true,limit:100,
+        ...(status==='CLOSED'?{sort_by:'TIMESTAMP',sort_direction:'DESC'}:{})})));
       if(opened===null||closed===null)return;
       if(!Array.isArray(opened?.data)||!Array.isArray(closed?.data))throw new Error('Invalid positions');
       const at=Date.now();

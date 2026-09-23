@@ -57,6 +57,8 @@ const state = {
   cryptoFlows: null,
   watchlist: new Set(), watchOnly: false, insights: null, research: null,
   liveRefresh: null, holdingWallet: '',
+  tapeNodes: new Map(), tapeHover: false, tapeTouchUntil: 0,
+  tapeReset: false, tapeForce: false, tapeStake: 0,
 };
 
 function loadWatchlist() {
@@ -71,7 +73,7 @@ const isWatched = wallet => state.watchlist.has((wallet || '').toLowerCase());
 function refreshWatchlist() {
   const count = $('#watch-count');
   if (count) count.textContent = `${state.watchlist.size} followed`;
-  renderBoard(); state.dirty = true;
+  renderBoard(); state.dirty = true; state.tapeForce = true;
   if (state.view === 'positions') renderPositions();
   if (state.view === 'soon') renderMarketsSoon();
   state.research?.render();
@@ -285,6 +287,12 @@ function addTrade(raw, live) {
     live: !!live,
   };
   if (!t.wallet || !t.side) return false;
+  // Polymarket's socket carries fills with a blank title, condition and outcome
+  // (seen live: sequentially named bot wallets trading $0.01 of one token).
+  // With no market named there is nothing to show or copy -- they rendered as
+  // `BOUGHT "?"` cards, ~19% of the unfiltered tape. A followed whale can still
+  // emit one, so it still nudges that whale's holdings refresh.
+  if (!t.title) { state.liveRefresh?.onTrade(t); return false; }
 
   const key = `${t.tx}|${t.wallet}|${t.ts}|${t.usd}`;
   if (state.seenKeys.has(key)) return false;
@@ -349,7 +357,9 @@ function connect() {
       const p = m?.payload ?? m;
       if (p && p.proxyWallet && p.side) {
         state.stamps.push(Date.now());
-        if (!state.paused) addTrade(p, true);
+        // Pause holds the DISPLAY; it used to drop fills on the floor, so
+        // anything a whale did while paused never reached the tape at all.
+        addTrade(p, true);
       }
     }
   };
@@ -730,13 +740,139 @@ function visibleTrades() {
     .slice(0, MAX_ROWS);
 }
 
-function renderTrades() {
-  const rows = visibleTrades();
+// The tape used to be thrown away and rebuilt every second. On a busy tape the
+// top row changed within 1.5s in testing, so a click aimed at "Copy this"
+// could land on a different bet than the one read -- and a mouse-down on a
+// button removed before mouse-up was simply lost. Rows are now kept per trade
+// and updated in place. New bets are HELD while the pointer is on the list,
+// just after a touch, while scrolled down into it, or while paused; they wait
+// in a floating banner that takes no layout space, so nothing moves under you.
+const tradeKey = (t) => `${t.tx}|${t.wallet}|${t.ts}|${t.usd}`;
+const TAPE_TOUCH_HOLD_MS = 5000;
+
+function tapeHeld() {
+  if (state.paused || state.tapeHover || Date.now() < state.tapeTouchUntil) return true;
+  const f = document.activeElement;
+  if (f?.closest?.('#tape') && f.matches?.(':focus-visible')) return true;
+  const list = $('#tape');
+  return !!list && list.getBoundingClientRect().top < -40;
+}
+
+function showTapeHold(pending) {
+  const box = $('#tape-hold');
+  if (!box) return;
+  box.hidden = !pending;
+  if (!pending) return;
+  const s = pending === 1 ? '' : 's';
+  $('#tape-hold-text').textContent = state.paused
+    ? `Paused · ${pending} new bet${s} waiting`
+    : `${pending} new bet${s} held so the list doesn't move under you`;
+  $('#tape-hold-show').textContent = state.paused ? 'Resume' : 'Show them';
+}
+
+function buildTradeRow(t, stake) {
+  const combo = isCombo(t);
+  const fresh = t.live && (Date.now() / 1000 - t.ts) < 90;
+  const li = el('li', `row${fresh ? ' fresh' : ''}`);
+  li._t = t;
+
+  const who = el('div', 'who');
+  const nm = el('span', 'nm', displayName(t.name, t.wallet));
+  const card = state.byWallet.get(t.wallet);
+  if (card) nm.addEventListener('click', () => openDrawer(card));
+  who.appendChild(nm);
+  if (t.verdict) who.appendChild(verdictPill(t.verdict));
+  if (combo) who.appendChild(el('span', 'tag', 'PARLAY'));
+  li._who = who;
+  li._stack = null;
+  li.appendChild(who);
+
+  const right = el('div');
+  right.appendChild(el('div', 'headline-num', money(t.usd)));
+  li._ago = right.appendChild(el('div', 'headline-sub', `${ago(t.ts)} ago`));
+  li.appendChild(right);
+
+  // plain sentence rather than a row of symbols
+  const says = el('div', 'says');
+  const sideSpan = el('span', `side ${t.side}`, t.side === 'BUY' ? 'BOUGHT' : 'SOLD');
+  says.appendChild(sideSpan);
+  says.appendChild(document.createTextNode(combo
+    ? ' a multi-market parlay'
+    : ` "${t.outcome || '?'}" at ${(t.price * 100).toFixed(0)}¢`));
+  li.appendChild(says);
+
+  const mk = el('div', 'mkt');
+  mk.appendChild(marketLink(t.title, t.slug));
+  if (t.end_date) mk.appendChild(el('span', 'tag plain', closesIn(t.end_date)));
+  mk.appendChild(copyMarketBtn(t.title));
+  li.appendChild(mk);
+
+  if (combo) {
+    li.appendChild(el('div', 'mirror',
+      'A parlay bundles several markets into one bet — a single copy trade cannot reproduce it.'));
+  } else if (t.price > 0 && t.price < 1) {
+    const shares = stake / t.price;
+    const mirror = el('div', 'mirror');
+    mirror.innerHTML = `To copy at $${stake} you'd buy <b>${shares.toFixed(shares < 10 ? 1 : 0)} shares</b> `
+      + `— that's their price. Arriving later you'll likely pay more.`;
+    li.appendChild(mirror);
+
+    const data = {
+      wallet: t.wallet, name: t.name, verdict: t.verdict,
+      title: t.title, slug: t.slug, outcome: t.outcome,
+      price: t.price, stake, condition: t.condition,
+    };
+    const actions = el('div', 'actions');
+    li._copy = actions.appendChild(copyButton(data));
+    li._copyKey = posKey(data.wallet, data.slug, data.title, data.outcome, data.condition);
+    li.appendChild(actions);
+  }
+  updateTradeRow(li, { layout: true });
+  return li;
+}
+
+// `layout:false` while held: only text that can't change a row's height, so a
+// badge wrapping onto a new line can't shove the rows under the pointer.
+function updateTradeRow(li, { layout }) {
+  const t = li._t;
+  li._ago.textContent = `${ago(t.ts)} ago`;
+  if (!layout) return;
+  const a = marketActivity(t.wallet, t.condition);
+  const label = a ? (a.mixed ? '⇄ both sides of this market' : `🔁 ${a.count}× this market`) : '';
+  if (label !== (li._stack?.textContent || '')) {
+    li._stack?.remove();
+    li._stack = label ? li._who.appendChild(el('span', 'tag stack', label)) : null;
+  }
+  if (li._copy && !li._copy.disabled && state.copies.some((c) => c.key === li._copyKey)) {
+    li._copy.textContent = '✓ Tracking';
+    li._copy.className = 'btn copybtn tracking';
+    li._copy.disabled = true;
+  }
+}
+
+function renderTrades({ force = false } = {}) {
   const list = $('#tape');
   const empty = $('#tape-empty');
   const stake = Number($('#t-stake').value) || 25;
+  if (state.tapeReset || stake !== state.tapeStake) {
+    state.tapeNodes.clear();
+    list.textContent = '';
+    state.tapeReset = false;
+    state.tapeStake = stake;
+  }
+  const rows = visibleTrades();
+  const held = !force && !state.tapeForce && tapeHeld();
+  state.tapeForce = false;
+
+  if (held) {
+    for (const li of state.tapeNodes.values()) updateTradeRow(li, { layout: false });
+    showTapeHold(rows.filter((t) => !state.tapeNodes.has(tradeKey(t))).length);
+    return;
+  }
+  showTapeHold(0);
 
   if (!rows.length) {
+    state.tapeNodes.clear();
     list.textContent = '';
     empty.hidden = false;
     // Three genuinely different reasons for an empty tape, misdiagnosed as
@@ -762,69 +898,20 @@ function renderTrades() {
   }
   empty.hidden = true;
 
-  const frag = document.createDocumentFragment();
-  for (const t of rows) {
-    const combo = isCombo(t);
-    const fresh = t.live && (Date.now() / 1000 - t.ts) < 90;
-    const li = el('li', `row${fresh ? ' fresh' : ''}`);
-
-    const who = el('div', 'who');
-    const nm = el('span', 'nm', displayName(t.name, t.wallet));
-    const card = state.byWallet.get(t.wallet);
-    if (card) nm.addEventListener('click', () => openDrawer(card));
-    who.appendChild(nm);
-    if (t.verdict) who.appendChild(verdictPill(t.verdict));
-    if (combo) who.appendChild(el('span', 'tag', 'PARLAY'));
-    const activity = marketActivity(t.wallet, t.condition);
-    if (activity) {
-      who.appendChild(el('span', 'tag stack',
-        activity.mixed ? '⇄ both sides of this market' : `🔁 ${activity.count}× this market`));
-    }
-    li.appendChild(who);
-
-    const right = el('div');
-    right.appendChild(el('div', 'headline-num', money(t.usd)));
-    right.appendChild(el('div', 'headline-sub', `${ago(t.ts)} ago`));
-    li.appendChild(right);
-
-    // plain sentence rather than a row of symbols
-    const says = el('div', 'says');
-    const sideSpan = el('span', `side ${t.side}`, t.side === 'BUY' ? 'BOUGHT' : 'SOLD');
-    says.appendChild(sideSpan);
-    says.appendChild(document.createTextNode(combo
-      ? ' a multi-market parlay'
-      : ` "${t.outcome || '?'}" at ${(t.price * 100).toFixed(0)}¢`));
-    li.appendChild(says);
-
-    const mk = el('div', 'mkt');
-    mk.appendChild(marketLink(t.title, t.slug));
-    if (t.end_date) mk.appendChild(el('span', 'tag plain', closesIn(t.end_date)));
-    mk.appendChild(copyMarketBtn(t.title));
-    li.appendChild(mk);
-
-    if (combo) {
-      li.appendChild(el('div', 'mirror',
-        'A parlay bundles several markets into one bet — a single copy trade cannot reproduce it.'));
-    } else if (t.price > 0 && t.price < 1) {
-      const shares = stake / t.price;
-      const mirror = el('div', 'mirror');
-      mirror.innerHTML = `To copy at $${stake} you'd buy <b>${shares.toFixed(shares < 10 ? 1 : 0)} shares</b> `
-        + `— that's their price. Arriving later you'll likely pay more.`;
-      li.appendChild(mirror);
-
-      const actions = el('div', 'actions');
-      actions.appendChild(copyButton({
-        wallet: t.wallet, name: t.name, verdict: t.verdict,
-        title: t.title, slug: t.slug, outcome: t.outcome,
-        price: t.price, stake, condition: t.condition,
-      }));
-      li.appendChild(actions);
-    }
-
-    frag.appendChild(li);
+  const want = new Set(rows.map(tradeKey));
+  for (const [k, li] of state.tapeNodes) {
+    if (!want.has(k)) { li.remove(); state.tapeNodes.delete(k); }
   }
-  list.textContent = '';
-  list.appendChild(frag);
+  let prev = null;
+  for (const t of rows) {
+    const k = tradeKey(t);
+    let li = state.tapeNodes.get(k);
+    if (li) updateTradeRow(li, { layout: true });
+    else { li = buildTradeRow(t, stake); state.tapeNodes.set(k, li); }
+    const at = prev ? prev.nextSibling : list.firstChild;
+    if (at !== li) list.insertBefore(li, at);
+    prev = li;
+  }
 }
 
 /* ────────────────────────── what they hold ──────────────────────────── */
@@ -1650,7 +1737,7 @@ document.querySelectorAll('.segbtn').forEach((b) => b.addEventListener('click', 
 $('#holding-wallet').addEventListener('change', e => {
   state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
 });
-import('./live.js?v=20260922c').then(({initLive}) => {
+import('./live.js?v=20260923a').then(({initLive}) => {
   state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
     renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
   state.liveRefresh.tick();
@@ -1667,7 +1754,7 @@ $('#show-screened').addEventListener('click', () => {
   state.watchOnly=false; $('#watch-only').checked=false;
   lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
 });
-import('./research.js?v=20260922c').then(({initResearch}) => {
+import('./research.js?v=20260923a').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
@@ -1678,8 +1765,11 @@ const chipBar = (id, apply) => $(id).addEventListener('click', (e) => {
   b.classList.add('active');
   apply(b);
 });
-chipBar('#t-chips', (b) => { state.who = b.dataset.who; state.dirty = true; });
-chipBar('#t-cat-chips', (b) => { state.tradeCategory = b.dataset.cat; state.dirty = true; });
+// Filter/stake changes are the user's own action, so they apply even while
+// the tape is holding still for them.
+const tapeChanged = () => { state.tapeForce = true; state.dirty = true; };
+chipBar('#t-chips', (b) => { state.who = b.dataset.who; tapeChanged(); });
+chipBar('#t-cat-chips', (b) => { state.tradeCategory = b.dataset.cat; tapeChanged(); });
 chipBar('#p-chips', (b) => { state.posFilter = b.dataset.p; renderPositions(); });
 chipBar('#p-cat-chips', (b) => { state.posCategory = b.dataset.cat; renderPositions(); });
 chipBar('#w-chips', (b) => { state.verdict = b.dataset.v; renderBoard(); });
@@ -1687,20 +1777,41 @@ chipBar('#w-cat-chips', (b) => { state.category = b.dataset.cat; renderBoard(); 
 chipBar('#soon-chips', (b) => { state.marketsBucket = b.dataset.bucket; renderMarketsSoon(); });
 
 $('#w-sort').addEventListener('change', renderBoard);
-$('#t-min').addEventListener('input', () => { state.dirty = true; });
+$('#t-min').addEventListener('input', tapeChanged);
 $('#t-stake').addEventListener('input', () => {
   lsSet('mirrorStake', $('#t-stake').value);
-  state.dirty = true;
+  tapeChanged();
 });
 {
   const saved = lsGet('mirrorStake', null);
   if (saved) $('#t-stake').value = saved;
 }
 
-$('#pause').addEventListener('click', () => {
-  state.paused = !state.paused;
-  $('#pause').textContent = state.paused ? 'Resume' : 'Pause';
-  $('#pause').classList.toggle('on', state.paused);
+const setPaused = (paused) => {
+  state.paused = paused;
+  $('#pause').textContent = paused ? 'Resume' : 'Pause';
+  $('#pause').classList.toggle('on', paused);
+  if (!paused) tapeChanged();
+};
+$('#pause').addEventListener('click', () => setPaused(!state.paused));
+
+// Hold the tape while a mouse is over it or the floating banner, and for a
+// few seconds after a touch. pointerover (not mouseenter on #tape) so moving
+// from the list onto the banner doesn't release the hold on the way.
+document.addEventListener('pointerover', (e) => {
+  if (e.pointerType === 'mouse') state.tapeHover = !!e.target.closest?.('#tape, #tape-hold');
+});
+document.documentElement.addEventListener('mouseleave', () => { state.tapeHover = false; });
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'mouse' && e.target.closest?.('#tape')) {
+    state.tapeTouchUntil = Date.now() + TAPE_TOUCH_HOLD_MS;
+  }
+}, { passive: true });
+$('#tape-hold-show').addEventListener('click', () => {
+  if (state.paused) setPaused(false);
+  renderTrades({ force: true });
+  const top = $('#tape').getBoundingClientRect().top;
+  if (top < 0) window.scrollBy({ top: top - 90, behavior: 'smooth' });
 });
 
 $('#mine-clear').addEventListener('click', () => {

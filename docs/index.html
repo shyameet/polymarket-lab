@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260922c">
+<link rel="stylesheet" href="style.css?v=20260923a">
 <link rel="icon" type="image/png" href="brand/logo.png">
 </head>
 <body>
@@ -73,7 +73,7 @@
   <h2>Find specialists. Follow their changes.</h2>
   <p class="hint" id="research-status">Loading research…</p>
   <h3>Topic leaderboards</h3>
-  <p class="hint">Ranked by realized profit within the selected topic, among screened whales. Up to 200 closed positions per whale; this is a sample, not lifetime topic performance. Open losses are not included. Topic labels are inferred from market text.</p>
+  <p class="hint">Ranked by realized profit within the selected topic, among screened whales. Each whale's 200 most recent closed positions — a recent sample, not lifetime topic performance, and not picked by result. Open losses are not included. Topic labels are inferred from market text.</p>
   <div class="controls">
     <label>Topic <select id="research-topic">
       <option value="weather">Weather</option><option value="politics">Politics</option>
@@ -201,10 +201,17 @@
     </div>
   </div>
 
-  <p class="hint">Each bet stays visible for 2 minutes, then drops off on its own —
-    newest first. Tap a name for their full record, or the orange
-    <b>⚡ Copy this</b> button to track that you took the same bet.</p>
+  <p class="hint">Newest first; each bet drops off after 2 minutes. The list holds
+    still while your pointer is on it or you're scrolled into it, so a tap can't land on
+    the wrong bet — new ones wait in a banner. Tap a name for their record, or
+    <b>⚡ Copy this</b> to track that you took the same bet.</p>
 
+  <div class="tapehold-slot">
+    <div id="tape-hold" class="tapehold" role="status" aria-live="polite" hidden>
+      <span id="tape-hold-text"></span>
+      <button id="tape-hold-show" class="btn small primary" type="button">Show them</button>
+    </div>
+  </div>
   <ul id="tape" class="tape"></ul>
   <p id="tape-empty" class="empty">Connecting…</p>
 </section>
@@ -312,6 +319,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260922c" type="module"></script>
+<script src="app.js?v=20260923a" type="module"></script>
 </body>
 </html>

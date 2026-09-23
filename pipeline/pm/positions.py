@@ -72,7 +72,13 @@ def _wallet_positions(wallet: str) -> tuple[list[dict], list[dict]]:
         print(f"  ! positions(open) {wallet}: {e}", file=sys.stderr)
         open_ = []
     try:
-        closed = api.user_positions(wallet, cap=TOPIC_CLOSED_SAMPLE, status="CLOSED")
+        # Newest first, NOT the API default: CLOSED rows default to realized-PnL
+        # descending, which made this capped sample each wallet's 200 best trades
+        # (100% "profitable" topic specialists) and dropped nearly every losing
+        # exit from "recently closed" (3.3% losses vs ~28% in a time-ordered
+        # sample). See the sort trap in api.user_positions.
+        closed = api.user_positions(wallet, cap=TOPIC_CLOSED_SAMPLE, status="CLOSED",
+                                    sort_by="TIMESTAMP", sort_direction="DESC")
     except api.PolymarketError as e:
         print(f"  ! positions(closed) {wallet}: {e}", file=sys.stderr)
         closed = None
