@@ -78,6 +78,7 @@ function refreshWatchlist() {
   if (showAll) showAll.hidden = !state.watchOnly;
   renderBoard(); state.dirty = true; state.tapeForce = true;
   if (state.view === 'positions') renderPositions();
+  if (state.view === 'recap') state.recapUI?.render();
   if (state.view === 'soon') renderMarketsSoon();
   state.research?.render();
   document.querySelectorAll('button[data-watch-wallet]').forEach(b => {
@@ -1722,13 +1723,13 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research', 'recap'];
 // Seven views grouped into four sections. Closing soon is the default landing:
 // it's the owner's stated main use, and it's always populated, where the live
 // tape can open on an empty two-minute window.
 const TAB_OF = { soon: 'markets', flows: 'markets', trades: 'live', positions: 'live',
-  whales: 'whales', research: 'whales', mine: 'mine' };
-const lastViewOfTab = { markets: 'soon', live: 'trades', whales: 'whales', mine: 'mine' };
+  whales: 'whales', research: 'whales', recap: 'recap', mine: 'mine' };
+const lastViewOfTab = { markets: 'soon', live: 'trades', whales: 'whales', recap: 'recap', mine: 'mine' };
 
 function showView(view) {
   if (!TAB_OF[view]) view = 'soon';
@@ -1758,6 +1759,7 @@ function showView(view) {
   if (view === 'soon') renderMarketsSoon();
   if (view === 'flows') renderCryptoFlows();
   if (view === 'research') state.research?.render();
+  if (view === 'recap') { state.recapUI?.render(); state.recapUI?.tick(); }
   paintFreshness();
   state.liveRefresh?.tick();
 }
@@ -1769,14 +1771,14 @@ document.querySelectorAll('.sub').forEach((b) => b.addEventListener('click', () 
 
 // One short line with a coloured dot instead of a four-line paragraph; the full
 // caveat stays available as the hover title and in each view's "about" note.
-const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers' };
+const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers', recap: 'Recap' };
 function paintFreshness() {
   const box = $('#section-freshness');
   if (!box) return;
   let text, level, title;
   if (SNAPSHOT_VIEWS[state.view]) {
     const ts = { whales: state.meta?.generated_at, research: state.insights?.generated_at,
-      flows: state.cryptoFlows?.generated_at }[state.view];
+      flows: state.cryptoFlows?.generated_at, recap: state.recapUI?.generatedAt() }[state.view];
     const age = ts ? Date.now() / 1000 - ts : Infinity;
     level = age < 1800 ? 'ok' : age < 4 * 3600 ? 'stale' : 'old';
     text = ts ? `${SNAPSHOT_VIEWS[state.view]} updated ${ago(ts)} ago` : 'Loading saved data…';
@@ -1798,7 +1800,7 @@ function paintFreshness() {
 $('#holding-wallet').addEventListener('change', e => {
   state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
 });
-import('./live.js?v=20260923b').then(({initLive}) => {
+import('./live.js?v=20260923c').then(({initLive}) => {
   state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
     renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
   state.liveRefresh.tick();
@@ -1816,7 +1818,12 @@ $('#show-screened').addEventListener('click', () => {
   state.watchOnly=false; $('#watch-only').checked=false;
   lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
 });
-import('./research.js?v=20260923b').then(({initResearch}) => {
+import('./recap.js?v=20260923c').then(({initRecap}) => {
+  state.recapUI = initRecap({state, el, displayName, money, ago, snapshotJSON, relayURL: relayUrl,
+    marketLink, copyMarketBtn, openDrawer, CAT_LABEL});
+  if (state.view === 'recap') { state.recapUI.render(); state.recapUI.tick(); }
+}).catch(() => { $('#recap-root').textContent = 'The recap could not load. Reload to retry.'; });
+import('./research.js?v=20260923c').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
@@ -1933,6 +1940,7 @@ setInterval(() => {
   if (state.view === 'trades') state.dirty = true;
   if (state.view === 'soon') renderMarketsSoon();
   if (state.view === 'positions') renderPositionStats();
+  if (state.view === 'recap') state.recapUI?.tick();
   state.liveRefresh?.tick();
   paintFreshness();
 }, 1000);
@@ -1955,7 +1963,9 @@ setInterval(() => { if (!document.hidden && state.copies.length) pollAllCopies()
 
 loadCopies();
 updateMineBadge();
-showView(lsGet('whaleLab.view', 'soon'));
+// A #view in the address (…/polymarket-lab/#recap) opens that view, so a
+// section can be bookmarked; otherwise the last view used comes back.
+showView(TAB_OF[location.hash.slice(1)] ? location.hash.slice(1) : lsGet('whaleLab.view', 'soon'));
 loadWhales().then(() => Promise.all([loadSnapshot(), loadPositions()])).then(connect);
 if (state.copies.length) pollAllCopies();
 loadMarketsSoon();

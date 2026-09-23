@@ -60,6 +60,11 @@ _ALLOWED: dict[str, set[str]] = {
     # field-identical to the websocket activity payload.
     "/trades": {"user", "market", "limit", "offset", "takerOnly", "side",
                 "filterType", "filterAmount"},
+    # v1 activity, for the daily recap. Verified live 2026-09-23: start/end (unix
+    # seconds) and type genuinely filter; limit is clamped to 500; an offset past
+    # 5000 is refused with HTTP 400 ("max historical activity offset").
+    "/activity": {"user", "limit", "offset", "start", "end", "type", "side",
+                  "sortBy", "sortDirection", "market"},
 }
 
 

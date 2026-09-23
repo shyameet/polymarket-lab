@@ -341,6 +341,63 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 .prose ul{margin:0 0 13px;padding-left:22px}
 .prose li{margin-bottom:7px}
 
+/* ── daily recap: one colour per day, the fraction first, the baseline beside it ── */
+.rc-cal{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:12px 14px;margin-bottom:12px}
+.rc-cal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.rc-cal-head b{font-size:15px}
+.rc-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;max-width:520px;margin:0 auto}
+.rc-dow{font-size:11px;color:var(--faint);text-align:center;text-transform:uppercase;letter-spacing:.05em}
+.rc-day{position:relative;aspect-ratio:1/1;min-width:0;border-radius:9px;border:1px solid var(--line);background:var(--surface-3);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:0;
+  cursor:pointer;color:var(--dim)}
+.rc-day.pad{border:0;background:none;cursor:default}
+.rc-day:disabled{cursor:default;opacity:.4}
+.rc-day.up{background:var(--win-wash);border-color:var(--win-line);color:var(--fg)}
+.rc-day.down{background:var(--loss-wash);border-color:var(--loss-line);color:var(--fg)}
+.rc-day.flat{background:var(--surface-2);color:var(--fg)}
+.rc-day.sel{outline:2px solid var(--orange);outline-offset:1px}
+.rc-day.today::after{content:'';position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:50%;
+  background:var(--orange)}
+.rc-dn{font-family:var(--mono);font-size:14px;font-weight:650;line-height:1.1}
+.rc-dw{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.1}
+.rc-key{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:center}
+.rc-sw{display:inline-block;width:11px;height:11px;border-radius:3px;border:1px solid var(--line);margin-left:6px}
+.rc-sw.up{background:var(--win-wash);border-color:var(--win-line)}
+.rc-sw.down{background:var(--loss-wash);border-color:var(--loss-line)}
+.rc-sw.flat{background:var(--surface-2)}
+.rc-head{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:12px}
+.rc-htop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rc-new .rc-htop,.rc-near .rc-htop{justify-content:space-between}
+.rc-date{font-size:16px}
+.rc-big{display:flex;align-items:baseline;gap:9px;margin:8px 0 6px}
+.rc-frac{font-family:var(--mono);font-size:40px;font-weight:750;letter-spacing:-.02em;line-height:1.05}
+.rc-won{font-size:15px;color:var(--dim)}
+.rc-bars{display:flex;flex-direction:column;gap:6px;margin:4px 0}
+.rc-bar{display:grid;grid-template-columns:118px minmax(0,1fr) 44px;align-items:center;gap:10px}
+.rc-bl{font-size:13px;color:var(--dim)}
+.rc-track{height:12px;border-radius:6px;background:var(--surface-3);overflow:hidden}
+.rc-fill{display:block;height:100%;border-radius:6px}
+.rc-fill.whale{background:var(--orange)}
+.rc-fill.coin{background:#6e6b64}
+.rc-bv{font-family:var(--mono);font-size:14px;text-align:right}
+.rc-gap{margin:4px 0 0}
+.rc-copy{margin:10px 0 0;font-size:15px}
+.rc-copy b.pos,.rc-copy b.neg{font-family:var(--mono)}
+.rc-sub{margin-top:6px}
+.rc-pill{font-size:11px;font-weight:750;padding:2px 8px;border-radius:999px;border:1px solid;letter-spacing:.03em}
+.rc-pill.won{color:var(--win);border-color:var(--win-line);background:var(--win-wash)}
+.rc-pill.lost{color:var(--loss);border-color:var(--loss-line);background:var(--loss-wash)}
+.rc-pill.open{color:var(--gold);border-color:var(--gold-line);background:var(--gold-wash)}
+.rc-pill.unknown{color:var(--faint);border-color:var(--line)}
+.rc-row .says{font-size:14.5px;color:var(--dim)}
+.rc-row .says b{color:var(--fg);font-weight:600}
+.rc-row .when{margin-right:2px}
+.rc-new,.rc-near{margin:4px 0 6px}
+#view-recap .tape+.btn{margin-top:10px}
+.rc-new>.btn,.rc-near>.btn{margin-top:10px}
+
 /* ── phones: sections in a bottom bar, data on the first screen ─────── */
 @media (max-width:760px){
   :root{--gutter:14px;--tabbar:calc(64px + env(safe-area-inset-bottom))}
@@ -387,6 +444,13 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
   .stat{padding:6px 10px}
   .stat .v{font-size:15px}
   .drawer-inner{padding:18px 16px 56px}
+  .rc-cal{padding:10px 8px}
+  .rc-grid{gap:4px}
+  .rc-dn{font-size:13px}
+  .rc-dw{font-size:9.5px}
+  .rc-frac{font-size:34px}
+  .rc-bar{grid-template-columns:96px minmax(0,1fr) 40px;gap:8px}
+  .rc-bl{font-size:12px}
 }
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}

@@ -22,6 +22,7 @@ from typing import Any
 
 from . import api
 from .crypto_flows import build_crypto_flows
+from .daily import build_daily
 from .feed import build_feed
 from .markets import build_markets_soon
 from .positions import build_positions
@@ -225,6 +226,8 @@ def main() -> int:
                     help="skip the closing-soon markets sweep")
     ap.add_argument("--no-crypto-flows", action="store_true",
                     help="skip the large-stablecoin-transfer sweep (Blockscout)")
+    ap.add_argument("--no-daily", action="store_true",
+                    help="skip the per-day recap of the worth-following whales")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -324,6 +327,16 @@ def main() -> int:
         meta["positions_open"] = len(positions["open"])
         meta["positions_recently_closed"] = len(positions["recently_closed"])
         _write(os.path.join(args.out, "whale_positions.json"), positions)
+
+    # One file per India-time day of what the worth-following whales opened, sold
+    # and won. Optional like crypto_flows: a failure here keeps the last written
+    # days and must never block the board from publishing.
+    if not args.no_daily:
+        try:
+            meta["daily"] = build_daily(ordered, now_ts=now_ts, workers=args.workers,
+                                        out_dir=os.path.join(args.out, "daily"), log=log)
+        except Exception as e:  # noqa: BLE001 - optional section, never blocks a publish
+            log(f"  ! daily recap failed, skipping this cycle: {e}")
 
     if not args.no_markets:
         markets_soon = build_markets_soon(now_ts=now_ts, log=log)

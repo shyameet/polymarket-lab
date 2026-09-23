@@ -20,5 +20,6 @@ jobs:
       - run: node --check docs/app.js
       - run: node --check docs/research.js
       - run: node --check docs/live.js
+      - run: node --check docs/recap.js
       - run: node --test tests/*.test.cjs
       - run: python -m unittest discover -s tests -p 'test_*.py'

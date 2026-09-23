@@ -73,6 +73,21 @@ response is CDN-cached `max-age=300`, so it can be 5 minutes stale. Only
 `wss://ws-live-data.polymarket.com` is real time (~43 fills/sec, unauthenticated,
 global — no per-market subscription).
 
+### Daily recap (`pipeline/pm/daily.py` → `docs/data/daily/`)
+
+One file per India-time day of what the **Worth following** whales did: every
+entry of $100+ (all buys of one outcome that day, at their average price), whether
+they sold it, whether it settled won or lost, and what a $100 copy would have made
+after taker fees. Each run rewrites today and the two days before, because outcomes
+keep arriving after a day ends; older days stay as written. `index.json` feeds the
+calendar. Every win rate is shown beside its **price baseline** (a no-skill buyer
+who pays 80¢ wins ~80% of the time), because a high win rate on favourites is not
+skill. The Recap tab also pulls trades made since the last run, live, through the
+relay. Traps found building it, both verified 2026-09-23: Gamma's
+`/markets/keyset` with repeated `condition_ids` returns ONE market whatever the
+count (so market state comes from the CLOB per condition), and combos/parlays carry
+a synthetic 64-character condition id with no CLOB market behind it.
+
 ### Run locally
 
 ```bash

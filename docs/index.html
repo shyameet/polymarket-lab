@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260923b">
+<link rel="stylesheet" href="style.css?v=20260923c">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
 <link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
 <link rel="apple-touch-icon" href="brand/icon-180.png?v=20260923c">
@@ -52,8 +52,8 @@
   </p>
 </div>
 
-<!-- Four sections, not seven. On phones this becomes a bottom tab bar, so the
-     first screen shows data instead of navigation. -->
+<!-- Five sections. On phones this becomes a bottom tab bar, so the first
+     screen shows data instead of navigation. -->
 <nav class="tabs" role="tablist" aria-label="Sections">
   <button class="tab" data-tab="markets" role="tab" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
@@ -64,6 +64,9 @@
   <button class="tab" data-tab="whales" role="tab" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>
     <span>Whales</span></button>
+  <button class="tab" data-tab="recap" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4M8 14h2M14 14h2M8 17h2"/></svg>
+    <span>Recap</span></button>
   <button class="tab" data-tab="mine" role="tab" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
     <span>Mine</span><span id="mine-badge" class="badge" hidden>0</span></button>
@@ -76,6 +79,7 @@
   <button class="sub" data-tab="live" data-view="positions" role="tab" type="button">Holdings &amp; exits</button>
   <button class="sub" data-tab="whales" data-view="whales" role="tab" type="button">Who to follow</button>
   <button class="sub" data-tab="whales" data-view="research" role="tab" type="button">Topic research</button>
+  <button class="sub" data-tab="recap" data-view="recap" role="tab" type="button">Daily recap</button>
 </div>
 
 <div class="toolbar">
@@ -87,6 +91,26 @@
     <button id="show-screened" class="btn small" type="button" hidden>Show all screened whales</button>
   </span>
 </div>
+
+<section id="view-recap" class="view" hidden>
+  <details class="about">
+    <summary>What the proven whales did each day, and whether copying them would have paid</summary>
+    <div class="about-body">
+      <p>Only whales rated <b>Worth following</b> — not Promising, not Risky. A day is an India-time day
+        (00:00–24:00 IST). Every buy of one outcome on one day is one entry, at its average price; smaller
+        than $100 is left out as noise. A later sell closes the oldest entry first.</p>
+      <p><b>Won / lost</b> counts only entries that are finished: sold, or the market settled. Open ones are
+        shown at the last price and never counted. Parlays cannot be priced, so they are listed but not scored.</p>
+      <p><b>Price baseline</b> is the chance the market itself gave: someone with no skill who pays 80¢ still
+        wins about 80% of the time (a sell before the end counts as a coin flip). A whale only shows skill
+        where the win rate beats it.</p>
+      <p><b>Per $100 copied</b> uses the whale's own price and follows their exit, with taker fees charged. It
+        is a ceiling: a real copy arrives later and pays more. Today and the two days before keep updating as
+        markets settle; older days stay as last written.</p>
+    </div>
+  </details>
+  <div id="recap-root"></div>
+</section>
 
 <section id="view-research" class="view" hidden>
   <p class="hint" id="research-status">Loading research…</p>
@@ -364,6 +388,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260923b" type="module"></script>
+<script src="app.js?v=20260923c" type="module"></script>
 </body>
 </html>
