@@ -98,8 +98,9 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
       if(!Array.isArray(opened?.data)||!Array.isArray(closed?.data))throw new Error('Invalid positions');
       const at=Date.now();
       if(opened.data.some(p=>!Number.isFinite(Number(p.current_size))))throw new Error('Invalid position size');
+      // redeemable = the market already resolved: nothing left to hold or exit.
       const open=opened.data.map(p=>normalizePosition(p,c,'OPEN',at,categorize))
-        .filter(p=>Math.max(p.value_usd,p.cost_usd)>=50);
+        .filter(p=>!p.redeemable && Math.max(p.value_usd,p.cost_usd)>=50);
       const closedRows=closed.data.map(p=>normalizePosition(p,c,'CLOSED',at,categorize))
         .filter(p=>p.last_event_at>=at/1000-7*86400 && Math.max(p.cost_usd,Math.abs(p.realized_pnl))>=50);
       state.research?.observePositions(c.wallet,open,closedRows,at);

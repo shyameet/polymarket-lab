@@ -210,6 +210,12 @@ def user_positions(wallet: str, *, cap: int | None = None,
     must pass sort_by="TIMESTAMP", sort_direction="DESC" to get a sample that
     wasn't selected on the outcome. TIMESTAMP and REALIZED_PNL are accepted;
     LAST_EVENT_AT / CREATED_AT / UPDATED_AT return HTTP 400.
+
+    REDEMPTION TRAP (verified live 2026-09-23): sorting fixes only half of it.
+    Winners are redeemed and become CLOSED; losers that resolve to $0 pay
+    nothing to redeem and usually stay OPEN with `redeemable: true` forever.
+    CLOSED alone is winners-heavy for anyone who holds to resolution -- count
+    redeemable OPEN rows as settled, and never show them as live holdings.
     """
     return list(_paginate("/v2/positions",
                           {"user": wallet, "status": status, "include_pnl": True,

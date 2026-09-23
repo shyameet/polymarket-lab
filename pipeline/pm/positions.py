@@ -65,12 +65,25 @@ def is_likely_hedge_residue(p: dict) -> bool:
     return bool(p.get("negative_risk")) and abs(float(p.get("avg_price") or 0) - 0.5) < 0.02
 
 
-def _wallet_positions(wallet: str) -> tuple[list[dict], list[dict]]:
+def _wallet_positions(wallet: str) -> tuple[list[dict], list[dict] | None, list[dict] | None]:
     try:
         open_ = api.user_positions(wallet, cap=MAX_OPEN_PER_WALLET, status="OPEN")
     except api.PolymarketError as e:
         print(f"  ! positions(open) {wallet}: {e}", file=sys.stderr)
         open_ = []
+    try:
+        # Losers usually never CLOSE. A position that resolves to $0 pays nothing
+        # to redeem, so it sits OPEN (flagged redeemable) indefinitely, while the
+        # winners get redeemed and become CLOSED. A hold-to-resolution wallet's
+        # CLOSED history is therefore winners-only by construction, whatever the
+        # sort -- verified live 2026-09-23: 0x9506e646 had 198/200 CLOSED rows
+        # profitable (+$52,108) and 170 resolved-at-$0 OPEN losers (-$41,301).
+        recent_open = api.user_positions(wallet, cap=TOPIC_CLOSED_SAMPLE, status="OPEN",
+                                         sort_by="TIMESTAMP", sort_direction="DESC")
+        resolved = [p for p in recent_open if p.get("redeemable")]
+    except api.PolymarketError as e:
+        print(f"  ! positions(resolved) {wallet}: {e}", file=sys.stderr)
+        resolved = None
     try:
         # Newest first, NOT the API default: CLOSED rows default to realized-PnL
         # descending, which made this capped sample each wallet's 200 best trades
@@ -82,7 +95,28 @@ def _wallet_positions(wallet: str) -> tuple[list[dict], list[dict]]:
     except api.PolymarketError as e:
         print(f"  ! positions(closed) {wallet}: {e}", file=sys.stderr)
         closed = None
-    return open_, closed
+    return open_, closed, resolved
+
+
+def _settled_unredeemed(resolved: list[dict], closed: list[dict], card: dict) -> list[dict]:
+    """Resolved-but-unredeemed OPEN positions, scored as settled at their final
+    value, limited to the span the CLOSED sample covers so both halves describe
+    the same recent period. Residual lean: a CLOSED winner is stamped at
+    redemption, an unredeemed loser at its last trade, so a loser entered just
+    before the window's start can drop out while its redeemed siblings stay in.
+    Small for short-dated markets; it only ever flatters, never penalizes."""
+    floor = 0
+    if len(closed) >= TOPIC_CLOSED_SAMPLE:
+        floor = min(int(p.get("last_event_at") or 0) for p in closed)
+    rows = []
+    for p in resolved:
+        if int(p.get("last_event_at") or 0) < floor:
+            continue
+        rec = _normalize(p, card, "OPEN")
+        rec["status"] = "RESOLVED"
+        rec["realized_pnl"] = rec["unrealized_pnl"]
+        rows.append(rec)
+    return rows
 
 
 def _normalize(p: dict, card: dict, status: str) -> dict:
@@ -133,13 +167,20 @@ def build_positions(cards: list[dict], *, workers: int = 8, now_ts: int,
         futs = {ex.submit(_wallet_positions, c["wallet"]): c for c in whales}
         for fut in cf.as_completed(futs):
             card = futs[fut]
-            opened, closed = fut.result()
-            if closed is None:
+            opened, closed, resolved = fut.result()
+            # Without the resolved half a profile would be winners-only, so a
+            # wallet where either request failed gets no profile, not a flattering one.
+            if closed is None or resolved is None:
                 failed += 1
             else:
                 normalized = [_normalize(p, card, "CLOSED") for p in closed]
+                normalized += _settled_unredeemed(resolved, closed, card)
                 profiles[card['wallet']] = topic_profile(normalized, capped=len(closed) >= TOPIC_CLOSED_SAMPLE)
             for p in opened:
+                # A resolved market can't be held or exited any more; a $0 loser
+                # there showed as "STILL HOLDING" (20% of published rows).
+                if p.get("redeemable"):
+                    continue
                 rec = _normalize(p, card, "OPEN")
                 if max(abs(rec["value_usd"]), abs(rec["cost_usd"])) >= MIN_POSITION_USD:
                     open_out.append(rec)

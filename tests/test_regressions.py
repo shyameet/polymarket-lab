@@ -47,6 +47,35 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual((closed.get('sort_by'), closed.get('sort_direction')),
                          ('TIMESTAMP', 'DESC'))
 
+    # Winners are redeemed into CLOSED; $0 losers stay OPEN + redeemable forever.
+    def test_unredeemed_losers_count_as_settled_losses_within_the_window(self):
+        closed = [{'condition_id': f'c{i}', 'last_event_at': 1000 + i, 'realized_pnl': 10,
+                   'avg_price': .5, 'total_size': 20}
+                  for i in range(positions.TOPIC_CLOSED_SAMPLE)]
+        lost = {'avg_price': .4, 'current_size': 100, 'unrealized_pnl': -40, 'redeemable': True}
+        resolved = [{**lost, 'condition_id': 'in-window', 'last_event_at': 1500},
+                    {**lost, 'condition_id': 'before-window', 'last_event_at': 900}]
+        rows = positions._settled_unredeemed(resolved, closed, {'wallet': 'w'})
+        self.assertEqual([r['condition'] for r in rows], ['in-window'])
+        self.assertEqual(rows[0]['realized_pnl'], -40)
+
+    def test_resolved_positions_are_not_live_holdings_and_failures_get_no_profile(self):
+        dead = {'condition_id': 'over', 'redeemable': True, 'current_value': 0,
+                'avg_price': .4, 'current_size': 500, 'unrealized_pnl': -200, 'last_event_at': 5}
+        live = {'condition_id': 'live', 'current_value': 300, 'avg_price': .4,
+                'current_size': 500, 'last_event_at': 5}
+        results = {'0xok': ([dead, live], [], []), '0xfail': ([live], [], None)}
+        original = positions._wallet_positions
+        positions._wallet_positions = lambda w: results[w]
+        try:
+            cards = [{'wallet': w, 'verdict': 'CANDIDATE'} for w in results]
+            out = positions.build_positions(cards, workers=1, now_ts=10, log=lambda *_: None)
+        finally:
+            positions._wallet_positions = original
+        self.assertEqual({p['condition'] for p in out['open']}, {'live'})
+        self.assertEqual(set(out['topic_profiles']), {'0xok'})
+        self.assertEqual(out['coverage']['closed_failed'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

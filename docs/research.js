@@ -101,8 +101,8 @@ export function initResearch({ state, displayName, money, ago, watchButton, isWa
       const li = card(r.wallet);
       if (r.specialist) li.append(node('span','tag',`${labels[r.category] || r.category} specialist · sampled`));
       li.append(node('div',`headline-num ${r.pnl > 0 ? 'pos':'neg'}`,money(r.pnl)),
-        node('div','tiny',`${r.markets} closed markets · ${r.wins} profitable · ${r.positive_months}/${r.months} closing months positive`),
-        node('p','tiny',`Sample return on cost: ${r.roi == null ? 'unavailable' : (r.roi*100).toFixed(1)+'%'} · ${r.capped ? 'latest 200 closed positions' : 'all closed positions'} · ${r.qualified ? 'consistency screen passed' : 'limited / unqualified evidence'}`));
+        node('div','tiny',`${r.markets} settled markets · ${r.wins} profitable · ${r.positive_months}/${r.months} months positive`),
+        node('p','tiny',`Sample return on cost: ${r.roi == null ? 'unavailable' : (r.roi*100).toFixed(1)+'%'} · ${r.capped ? 'latest 200 settled positions' : 'all settled positions'} · ${r.qualified ? 'consistency screen passed' : 'limited / unqualified evidence'}`));
       list.append(li);
     }
     if (!rows.length) list.append(node('li','empty',state.watchOnly && !state.watchlist.size
