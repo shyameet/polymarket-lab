@@ -349,6 +349,7 @@ function connect() {
       }));
     }
     setSource('live', 'Trade feed connected · waiting for trades');
+    $('#src-status').textContent = '';
     clearInterval(state.pinger);
     state.pinger = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) { try { ws.send('PING'); } catch {} }
@@ -372,29 +373,40 @@ function connect() {
   ws.onclose = () => { clearTimeout(openTimer); clearInterval(state.pinger); onWsDead(); };
 }
 
+// It used to STOP after six failed connects in a row and never try again until
+// a reload. Six failures take ~45 s -- a locked phone, a background tab, a network
+// switch or the relay's daily quota running out all do that -- so the page sat on
+// "isn't responding" long after the relay was back (seen 2026-09-24). Now it
+// slows to one try every 30 s but never stops, and tries at once when the tab is
+// looked at again or the network returns.
+const SLOW_RETRY_MS = 30_000;
 function onWsDead() {
   setSource(state.snapshotMeta ? 'snapshot' : 'down',
     state.snapshotMeta ? 'Saved data · reconnecting' : 'Disconnected · reconnecting');
   state.directFails += 1;
   const relay = relayUrl();
-  if (!relay && state.directFails >= DIRECT_MAX_FAILS) {
+  const slow = state.directFails >= (relay ? DIRECT_MAX_FAILS + 3 : DIRECT_MAX_FAILS);
+  if (slow) {
     state.source = 'snapshot';
     refreshSourceLabel();
-    $('#src-status').textContent =
-      "The live trade connection failed. The browser cannot identify whether this is a network block, upstream outage or another connection problem. "
-      + 'Showing saved trades. Holdings and markets report their own connection status. A reachable relay may help.';
+    $('#src-status').textContent = relay
+      ? `Can't reach the relay right now (${relay}). Retrying every 30 seconds, and straight away `
+        + 'when you come back to this tab. Showing saved trades meanwhile.'
+      : 'The live trade connection failed; the browser cannot tell a network block from an outage. '
+        + 'Retrying every 30 seconds. Showing saved trades. A reachable relay may help.';
     if (!state.hintShown) { state.hintShown = true; $('#src-panel').hidden = false; }
-    return;
   }
-  if (relay && state.directFails >= DIRECT_MAX_FAILS + 3) {
-    state.source = 'snapshot';
-    refreshSourceLabel();
-    $('#src-status').textContent = `Relay ${relay} isn't responding. Check it's deployed.`;
-    $('#src-panel').hidden = false;
-    return;
-  }
-  setTimeout(connect, state.backoff);
-  state.backoff = Math.min(state.backoff * 2, 15_000);
+  clearTimeout(state.retryTimer);
+  state.retryTimer = setTimeout(connect, slow ? SLOW_RETRY_MS : state.backoff);
+  if (!slow) state.backoff = Math.min(state.backoff * 2, 15_000);
+}
+function reconnectNow() {
+  const ws = state.ws;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  clearTimeout(state.retryTimer);
+  state.backoff = 1000;
+  state.directFails = 0;
+  connect();
 }
 
 /* ─────────────────────────── data loading ───────────────────────────── */
@@ -559,7 +571,10 @@ function migrateCopies() {
  * for tracked copies, but REST itself is still cached for up to five minutes.
  */
 const POLY_DATA = 'https://data-api.polymarket.com/v2';
-const COPY_POLL_MS = 1000; // One-second target, bounded by request duration and backoff.
+// Every 5 s, not every second: each check is 1-2 relay requests per copy, and at
+// 1 s one open tab with one copy spent ~7,000 of the relay's free 100,000 daily
+// requests an hour -- the quota ran out and the whole page went dark (2026-09-24).
+const COPY_POLL_MS = 5000;
 let copiesPolling = false;
 let copiesRetryAt = 0;
 
@@ -1800,7 +1815,7 @@ function paintFreshness() {
 $('#holding-wallet').addEventListener('change', e => {
   state.holdingWallet=e.target.value; renderPositions(); state.liveRefresh?.tick();
 });
-import('./live.js?v=20260923c').then(({initLive}) => {
+import('./live.js?v=20260924a').then(({initLive}) => {
   state.liveRefresh=initLive({state,relayURL:relayUrl,categorize:categorizeClient,
     renderPositions,renderMarkets:renderMarketsSoon,checkCopies});
   state.liveRefresh.tick();
@@ -1818,12 +1833,12 @@ $('#show-screened').addEventListener('click', () => {
   state.watchOnly=false; $('#watch-only').checked=false;
   lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
 });
-import('./recap.js?v=20260923c').then(({initRecap}) => {
+import('./recap.js?v=20260924a').then(({initRecap}) => {
   state.recapUI = initRecap({state, el, displayName, money, ago, snapshotJSON, relayURL: relayUrl,
     marketLink, copyMarketBtn, openDrawer, CAT_LABEL});
   if (state.view === 'recap') { state.recapUI.render(); state.recapUI.tick(); }
 }).catch(() => { $('#recap-root').textContent = 'The recap could not load. Reload to retry.'; });
-import('./research.js?v=20260923c').then(({initResearch}) => {
+import('./research.js?v=20260924a').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
 }).catch(() => { $('#research-status').textContent = 'Research could not load. Reload to retry.'; });
@@ -1960,6 +1975,11 @@ setInterval(loadWhales,60_000);
 // regardless of which tab is open (an exit while you're on Live buys should
 // still update the badge), just skips the DOM repaint unless you're looking.
 setInterval(() => { if (!document.hidden && state.copies.length) pollAllCopies(); }, COPY_POLL_MS);
+
+// Back the moment the tab is looked at again or the network returns, instead of
+// waiting out the 30 s retry (see onWsDead).
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reconnectNow(); });
+window.addEventListener('online', reconnectNow);
 
 loadCopies();
 updateMineBadge();

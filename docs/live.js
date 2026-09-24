@@ -1,7 +1,7 @@
 /* Direct read-only refresh for active views. Snapshot age must never be reset
  * by polling an unchanged JSON file. Poll cadence != upstream data freshness.
- * All-wallet coverage is deliberately bounded; a focused wallet refreshes on
- * every one-second tick, without overlapping requests. */
+ * Every request goes through the relay, whose free plan allows 100,000 a day
+ * across all tabs, so the pace below is a budget, not a preference. */
 export function bucketBounds(now = new Date()) {
   const y = now.getUTCFullYear(), m = now.getUTCMonth(), d = now.getUTCDate();
   const sunday = (7 - now.getUTCDay()) % 7;
@@ -48,6 +48,9 @@ export function mergePositionSnapshot(current, incoming, checked) {
     ...(current[key]||[]).filter(p=>newer.has(p.wallet))];
   return {open:merge('open'),recently_closed:merge('recently_closed')};
 }
+
+export const MARKETS_EVERY_MS = 10_000;
+export const HOLDINGS_EVERY_MS = 2_000;
 
 export function initLive({state,relayURL,categorize,renderPositions,renderMarkets,checkCopies}) {
   const walletChecks = {}, marketChecks = {};
@@ -114,10 +117,16 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
       holdingError='Some live holdings requests failed; older rows retain their own timestamps.';
     } finally {busy.delete(key);}
   }
+  // Markets every 10 s and one whale's holdings (2 requests) every 2 s. At the old
+  // one-second pace a single open tab could spend the day's quota in hours and
+  // take every live view down with it (2026-09-24).
+  let marketsAt=0, holdingsAt=0;
   function tick() {
     if(document.hidden)return;
-    if(state.view==='soon')markets();
-    if(state.view==='positions' || state.view==='research') {
+    const now=Date.now();
+    if(state.view==='soon' && now-marketsAt>=MARKETS_EVERY_MS){marketsAt=now;markets();}
+    if((state.view==='positions' || state.view==='research') && now-holdingsAt>=HOLDINGS_EVERY_MS) {
+      holdingsAt=now;
       const focus=state.view==='positions' ? state.holdingWallet : '';
       let cards=state.whales.filter(c=>focus?c.wallet===focus:
         (state.watchOnly?state.watchlist.has(c.wallet):['CANDIDATE','WATCH','FRAGILE'].includes(c.verdict)));
@@ -125,7 +134,7 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
         ||(walletChecks[a.wallet]?.at||0)-(walletChecks[b.wallet]?.at||0));
       const active=[...busy].filter(k=>k.startsWith('wallet:')&&!k.endsWith('OPEN')&&!k.endsWith('CLOSED')).length;
       cards.filter(c=>!busy.has('wallet:'+c.wallet)&&Date.now()>=(retry.get('wallet:'+c.wallet)||0))
-        .slice(0,Math.max(0,4-active)).forEach(wallet);
+        .slice(0,Math.max(0,1-active)).forEach(wallet);
     }
     paintStatus();
   }
@@ -135,10 +144,10 @@ export function initLive({state,relayURL,categorize,renderPositions,renderMarket
     const p=document.querySelector('#holdings-live-status'),m=document.querySelector('#markets-live-status');
     if(p) {
       const scope=state.holdingWallet?[state.holdingWallet]:state.whales.filter(c=>state.watchOnly?state.watchlist.has(c.wallet):['CANDIDATE','WATCH','FRAGILE'].includes(c.verdict)).map(c=>c.wallet);
-      const fresh=scope.filter(w=>Date.now()-(walletChecks[w]?.at||0)<15_000).length;
-      p.textContent=`1-second refresh loop · ${state.holdingWallet?'focused whale':'rotating up to 4 whales per tick'} · ${fresh}/${scope.length} whales received in the last 15s. ${holdingError} API data can lag. Each row shows its source age.`;
+      const fresh=scope.filter(w=>Date.now()-(walletChecks[w]?.at||0)<600_000).length;
+      p.textContent=`Refreshing ${state.holdingWallet?'the focused whale':'one whale'} every 2 s (whales that just traded go first) · ${fresh}/${scope.length} whales received in the last 10 min. ${holdingError} API data can lag. Each row shows its source age.`;
     }
-    if(m)m.textContent=`1-second refresh loop · ${market?'API response '+age(market.at):'showing saved snapshot while connecting'}. ${marketError} Upstream prices can lag.`;
+    if(m)m.textContent=`Refreshing every 10 s · ${market?'API response '+age(market.at):'showing saved snapshot while connecting'}. ${marketError} Upstream prices can lag.`;
   }
   return {tick,paintStatus,walletChecks,marketChecks,
     onTrade:t=>{if(t.live && state.whales.some(c=>c.wallet===t.wallet))dirtyWallets.add(t.wallet);},

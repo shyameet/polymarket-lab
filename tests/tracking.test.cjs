@@ -110,3 +110,17 @@ test('fills with no market title are dropped instead of rendered as "?" cards', 
   assert.equal(real,true);
   assert.equal(a.run('state.trades.length'),1);
 });
+
+test('the live socket never stops retrying (it used to give up for good after 6 failures)', () => {
+  const delays = [];
+  const node = { textContent: '', hidden: true, className: '', value: '' };
+  const ctx = vm.createContext({ console, Date, URL, URLSearchParams, AbortController, AbortSignal,
+    location: {search:''}, fetch: async () => { throw new Error('offline'); },
+    setTimeout: (fn, ms) => { delays.push(ms); return delays.length; }, clearTimeout() {},
+    document: { querySelector: () => node }, localStorage: { getItem: () => null, setItem() {} } });
+  vm.runInContext(definitions, ctx);
+  for (let i = 0; i < 12; i++) vm.runInContext('onWsDead()', ctx);
+  assert.equal(delays.length, 12, 'a reconnect is scheduled after every failure');
+  assert.equal(delays.at(-1), 30000, 'slowed to 30 s, not stopped');
+  assert.match(node.textContent, /Retrying every 30 seconds/);
+});

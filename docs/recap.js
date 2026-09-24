@@ -19,7 +19,7 @@ export const IST_MS = 19_800_000;          // +05:30, no daylight saving
 export const istDay = (ts) => new Date(ts * 1000 + IST_MS).toISOString().slice(0, 10);
 export const istClock = (ts) => new Date(ts * 1000 + IST_MS).toISOString().slice(11, 16);
 const NEAR = 0.02;                          // "still near their price": within 2c
-const TOPUP_EVERY_MS = 5 * 60_000;
+const TOPUP_EVERY_MS = 10 * 60_000;       // ~210 relay requests per check, so not more often
 const DAY_POLL_MS = 30_000;
 
 /** 'YYYY-MM' -> Monday-first calendar cells: a date string, or null for padding. */
