@@ -2,7 +2,7 @@
  *
  * pipeline/pm/fund.py replays every whale fill since its last run, in time order,
  * the way a bot watching live would have traded it, and writes data/fund/fund.json
- * (every 15 minutes once the timer in scheduler/ is on). The books come from that
+ * (about every 15 minutes: .github/workflows/fund.yml paces itself). The books come from that
  * one ledger only. The "Being copied right now" strip is a preview: it reads the
  * whales' trades since the last update through the relay and applies the same
  * rules, so what the next update will book is visible before it lands.

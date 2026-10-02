@@ -2,31 +2,52 @@ name: Paper funds
 
 # The two $1,000 paper funds (pipeline/pm/fund.py) on their own: read the whale
 # trades since the last run and replay them, nothing else -- about a minute.
-# The Cloudflare timer in scheduler/ dispatches this every 15 minutes once its
-# token is installed. GitHub's own schedule below is only a fallback: it fires
-# every few hours, not when asked. The full scorecard rebuild (refresh.yml)
-# runs with --no-fund, so the two jobs never write the same files.
+#
+# It paces itself every ~15 minutes with no outside timer and no stored token.
+# Each run ends by queuing the next one (the built-in GITHUB_TOKEN may trigger
+# workflow_dispatch), and a queued run first passes the `pace` job, whose
+# `fund-timer` environment has a 14-minute wait timer (created 2026-10-02 with
+# `gh api -X PUT repos/shyameet/polymarket-lab/environments/fund-timer
+# -F wait_timer=14`). Waiting holds no runner. Only one successor is ever
+# queued; if the chain breaks (an outage), GitHub's schedule below restarts it.
+# The full scorecard rebuild (refresh.yml) runs with --no-fund, so the two jobs
+# never write the same files.
 
 on:
   schedule:
     - cron: '7,37 * * * *'
   workflow_dispatch:
+    inputs:
+      chained:
+        description: 'Queued by the previous run: wait out the 14-minute timer first'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: ['pipeline/pm/fund.py', '.github/workflows/fund.yml']
 
 permissions:
   contents: write
-
-concurrency:
-  group: fund
-  # Never cancel: a run that is replaying should finish and save its place.
-  cancel-in-progress: false
+  actions: write        # to queue the next run
 
 jobs:
+  pace:
+    if: ${{ inputs.chained }}
+    runs-on: ubuntu-latest
+    environment: fund-timer
+    steps:
+      - run: echo "14 minutes since the previous run; replaying now"
+
   fund:
+    needs: pace
+    # after the timer, or at once when started any other way (pace is skipped)
+    if: ${{ !cancelled() && needs.pace.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: fund
+      # Never cancel: a run that is replaying should finish and save its place.
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +73,7 @@ jobs:
             exit 0
           fi
           git commit -m "data: paper funds ($(date -u +%Y-%m-%dT%H:%MZ))"
-          # Only this job writes docs/data/fund, and runs never overlap, so a
+          # Only this job writes docs/data/fund, and replays never overlap, so a
           # rejected push is a refresh.yml commit to other files: rebase cleanly.
           for attempt in 1 2 3 4 5; do
             if git push; then
@@ -65,4 +86,35 @@ jobs:
             sleep $((attempt * 3))
           done
           echo "::error::could not push after 5 attempts"
+          exit 1
+
+      # Runs even when the replay failed, so one bad cycle never stops the
+      # clock. Exactly one successor: skip when another run is already queued
+      # or waiting. In-progress runs are not counted: one may have finished its
+      # own check already, and then nobody would queue the next run.
+      - name: Queue the next run
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            waiting=$(gh run list -R "${{ github.repository }}" --workflow fund.yml --limit 30 \
+              --json databaseId,status \
+              --jq '[.[] | select(.databaseId != ${{ github.run_id }})
+                         | select(.status == "queued" or .status == "waiting"
+                                  or .status == "requested" or .status == "pending")] | length') && break
+            sleep $((attempt * 5))
+          done
+          if [ "${waiting:-0}" -gt 0 ]; then
+            echo "a next run is already queued"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if gh workflow run fund.yml -R "${{ github.repository }}" --ref main -f chained=true; then
+              echo "next run queued; it starts after the 14-minute timer"
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not queue the next run; GitHub's schedule will restart the chain"
           exit 1

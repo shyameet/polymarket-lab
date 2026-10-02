@@ -1,19 +1,16 @@
-# Paper-fund timer
+# Paper-fund timer (optional, not deployed)
 
-This separate Cloudflare Worker dispatches the paper-fund job
-(`.github/workflows/fund.yml`) every 15 minutes, without relying on GitHub's
-cron, which fires every few hours at best. The job replays the whales' trades
-since its last run (about a minute), so the Paper fund page is never more than
-roughly 25 minutes behind: up to 15 minutes to the next tick, about a minute of
-replay, and a 10-minute safety lag on the newest trades, plus Pages publishing.
-A run still in progress is never doubled up. GitHub's own schedules stay as a
-fallback, so if the timer stops (an expired token, say) the page keeps updating,
-just every few hours again.
+Not needed: since 2026-10-02 `.github/workflows/fund.yml` paces itself every ~15
+minutes. Each run queues the next one, which waits out the 14-minute wait timer of
+the `fund-timer` environment. That needs no outside service and no stored token.
 
-It does not dispatch the full scorecard rebuild (`refresh.yml`): rebuilding
-everything every 15 minutes would add 1-2 GB of git history a month.
+This Cloudflare Worker is the alternative, kept in case a stricter clock is ever
+wanted: it dispatches `fund.yml` every 15 minutes from outside GitHub and skips a
+tick while a run is still active. It never dispatches the full scorecard rebuild
+(`refresh.yml`): rebuilding everything every 15 minutes would add 1-2 GB of git
+history a month.
 
-Activation (not active merely because these files exist):
+Activation (only if wanted; not active merely because these files exist):
 
 1. Create a fine-grained GitHub token limited to `shyameet/polymarket-lab`, with
    repository permission **Actions: Read and write**, and the longest expiry
@@ -21,9 +18,7 @@ Activation (not active merely because these files exist):
 2. From this directory run `npx wrangler secret put GITHUB_TOKEN` and paste the
    token into the hidden local prompt (allow it to create the Worker if asked).
    Never put the token in source, browser code or chat.
-3. Run `npx wrangler deploy`. Within 15 minutes a "Paper funds" run should appear
-   under the repository's Actions tab with the event `workflow_dispatch`.
+3. Run `npx wrangler deploy`.
 
-There is no public HTTP endpoint that can trigger runs. No paid services or
-storage bindings are required. Failed ticks (token expiry, GitHub API errors)
-show in the Worker's logs in the Cloudflare dashboard.
+Running both would only add an occasional extra run: `fund.yml` queues at most one
+successor and its replays never overlap.

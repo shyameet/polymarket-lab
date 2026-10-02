@@ -109,14 +109,17 @@ minute late (CLOB price history at +60 s): in 5-minute "Up or Down" markets that
 minute moves the price by up to 30¢, and the per-topic table shows it.
 
 The funds run in their own job, `.github/workflows/fund.yml` (about a minute: read
-the whale trades since the last run, replay, commit `docs/data/fund` only). The
-Cloudflare timer in `scheduler/` dispatches it every 15 minutes once its token is
-installed (activation steps in `scheduler/README.md`); GitHub's own schedule is the
-fallback, firing every few hours. The full rebuild runs with `--no-fund`, so the two
-jobs never write the same files, and it stays on GitHub's schedule: rebuilding
-everything every 15 minutes would add 1-2 GB of git history a month. Between
-updates the page's "Being copied right now" strip reads the whale trades since the
-last update through the relay and applies the same rules, as a preview.
+the whale trades since the last run, replay, commit `docs/data/fund` only), and it
+paces itself every ~15 minutes with no outside timer or stored token: each run ends
+by queuing the next one with the built-in `GITHUB_TOKEN` (allowed for
+`workflow_dispatch`), and a queued run first waits out the 14-minute wait timer of
+the `fund-timer` environment, which holds no runner. Only one successor is ever
+queued; GitHub's own schedule (every few hours in practice) restarts the chain if an
+outage breaks it. The full rebuild runs with `--no-fund`, so the two jobs never write
+the same files, and it stays on GitHub's schedule: rebuilding everything every 15
+minutes would add 1-2 GB of git history a month. Between updates the page's "Being
+copied right now" strip reads the whale trades since the last update through the
+relay and applies the same rules, as a preview.
 
 Two traps found building it, verified 2026-10-02: settling only at the end of a run
 starved fund A of cash it would have had back hours earlier (198 signals "missed"
