@@ -356,11 +356,21 @@ class Run(unittest.TestCase):
             fund.build_fund(self.CARDS, now_ts=T, out_dir=d, log=lambda m: None)
             fund.build_fund(self.CARDS[1:], now_ts=T + 3600, out_dir=d, log=lambda m: None)
             st = json.loads(Path(d, 'state.json').read_text(encoding='utf-8'))
-        self.assertEqual({c[1:] for c in calls}, {(T - fund.LAG_S + 1, T + 3600 - fund.LAG_S)})
+        self.assertEqual({c[1:] for c in calls}, {(T + 1, T + 3600 - fund.LAG_S)})   # nothing before opening
         self.assertEqual(st['cursor'], T + 3600 - fund.LAG_S)
         self.assertEqual(len(st['funds']['A']['open']), 1)
         self.assertEqual([w['wallet'] for w in st['whales']], [W2])     # the list for the NEXT window
         self.assertEqual(st['last_run']['signals'], 1)
+
+    def test_a_run_soon_after_opening_has_no_window_yet(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(fund, '_activity', side_effect=AssertionError('nothing to read yet')), \
+                mock.patch.object(fund, '_clob_market', Markets()), \
+                mock.patch.object(fund, '_closed_at', {}.get):
+            fund.build_fund(self.CARDS, now_ts=T, out_dir=d, log=lambda m: None)
+            fund.build_fund(self.CARDS, now_ts=T + 300, out_dir=d, log=lambda m: None)
+            st = json.loads(Path(d, 'state.json').read_text(encoding='utf-8'))
+        self.assertEqual((st['cursor'], st['last_run']['fills']), (T, 0))
 
     def test_lookups_are_fetched_once_each_and_give_the_direct_result(self):
         m = Markets()

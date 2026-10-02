@@ -109,7 +109,10 @@ def is_combo(condition: str, outcome: str, title: str) -> bool:
 # ─────────────────────────── state ──────────────────────────────────────────
 
 def new_state(now: int, whales: list[dict]) -> dict:
-    return {"v": 1, "started": now, "cursor": now - LAG_S, "whales": whales,
+    # Copying starts the moment the whale list is taken, never before it: the
+    # first window is (now, next run - LAG_S]. (The first live opening started
+    # LAG_S earlier and copied three minutes of fills it had no list for yet.)
+    return {"v": 1, "started": now, "cursor": now, "whales": whales,
             "episodes": {}, "seq": 0, "last_run": None,
             "funds": {k: {"cash": START_CASH, "open": [], "closed": [], "days": {}, "cats": {},
                           "points": [[now, START_CASH]], "missed_cash": 0,
