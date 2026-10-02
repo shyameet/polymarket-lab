@@ -441,6 +441,8 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 .fd-table tr:last-child td{border-bottom:0}
 .fd-table small{margin-left:6px;font-size:12px}
 .fd-late{margin:4px 0 6px}
+.fd-live{margin:0 0 14px}
+.fd-live .who .tag{white-space:nowrap}
 #view-fund .tape+.btn{margin-top:10px}
 
 /* ── phones: sections in a bottom bar, data on the first screen ─────── */

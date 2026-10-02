@@ -387,8 +387,8 @@ def view(state: dict, now: int) -> dict:
         for p in sorted(f["open"], key=lambda p: -p["ts"]):
             sold = sum(s["frac"] for s in p["sales"])
             open_rows.append({
-                **{k: p.get(k) for k in ("id", "title", "slug", "outcome", "category", "whale",
-                                         "whale_name", "ts", "end_ts")},
+                **{k: p.get(k) for k in ("id", "token", "condition", "title", "slug", "outcome", "category",
+                                         "whale", "whale_name", "ts", "end_ts")},
                 "price": _r(p["price"], 4), "late_entry": _r(p.get("late_entry"), 4),
                 "mark": _r(p.get("mark"), 4), "sold_frac": _r(sold, 4),
                 "exit": _r(sum(s["frac"] * s["price"] for s in p["sales"]) / sold, 4) if sold else None,
@@ -585,7 +585,7 @@ def build_fund(cards: list[dict], *, now_ts: int, out_dir: str, workers: int = 8
         signals, settled = _replay(state, fills, signal, state["cursor"], now_ts,
                                    _Lookups(_clob_market), _Lookups(_closed_at),
                                    _Lookups(_price_later), workers)
-        if moved:
+        if moved and whales_now:        # an empty list means a broken board, not "follow no one"
             state["whales"] = whales_now
         state["last_run"] = {"at": now_ts, "from": start, "to": state["cursor"], "fills": len(fills),
                              "signals": signals, "whales": len(follow), "failed": len(failed),
@@ -600,3 +600,25 @@ def build_fund(cards: list[dict], *, now_ts: int, out_dir: str, workers: int = 8
     with open(os.path.join(out_dir, "fund.json"), "w", encoding="utf-8") as fh:
         json.dump(view(state, now_ts), fh, separators=(",", ":"), ensure_ascii=False)
     return {k: _r(state["funds"][k]["points"][-1][1]) for k in FUNDS}
+
+
+def main() -> int:
+    """The 15-minute job (.github/workflows/fund.yml): the paper funds alone,
+    following the whale list the full pipeline last published in whales.json."""
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cards", default="../docs/data/whales.json")
+    ap.add_argument("--out", default="../docs/data/fund")
+    ap.add_argument("--workers", type=int, default=8)
+    args = ap.parse_args()
+    with open(args.cards, encoding="utf-8") as fh:
+        cards = json.load(fh)
+    t0 = time.time()
+    out = build_fund(cards, now_ts=int(t0), out_dir=args.out, workers=args.workers,
+                     log=lambda m: print(m, flush=True))
+    print(f"paper funds done in {time.time() - t0:.0f}s: {out}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

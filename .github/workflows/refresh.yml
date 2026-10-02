@@ -45,6 +45,8 @@ jobs:
         with:
           python-version: '3.12'
 
+      # --no-fund: the paper funds run in their own job (fund.yml), every 15
+      # minutes, and are the only writer of docs/data/fund.
       - name: Build scorecards
         working-directory: pipeline
         run: |
@@ -52,6 +54,7 @@ jobs:
             --top "${{ github.event.inputs.top || 60 }}" \
             --workers 8 \
             --out ../docs/data \
+            --no-fund \
             ${{ github.event.inputs.discover == 'false' && '--no-discover' || '' }}
 
       - name: Sanity-check the output

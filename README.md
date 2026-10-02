@@ -108,6 +108,16 @@ book between runs; `fund.json` is what the page reads. Every copy is also scored
 minute late (CLOB price history at +60 s): in 5-minute "Up or Down" markets that
 minute moves the price by up to 30¢, and the per-topic table shows it.
 
+The funds run in their own job, `.github/workflows/fund.yml` (about a minute: read
+the whale trades since the last run, replay, commit `docs/data/fund` only). The
+Cloudflare timer in `scheduler/` dispatches it every 15 minutes once its token is
+installed (activation steps in `scheduler/README.md`); GitHub's own schedule is the
+fallback, firing every few hours. The full rebuild runs with `--no-fund`, so the two
+jobs never write the same files, and it stays on GitHub's schedule: rebuilding
+everything every 15 minutes would add 1-2 GB of git history a month. Between
+updates the page's "Being copied right now" strip reads the whale trades since the
+last update through the relay and applies the same rules, as a preview.
+
 Two traps found building it, verified 2026-10-02: settling only at the end of a run
 starved fund A of cash it would have had back hours earlier (198 signals "missed"
 in a 6-hour replay, 140 once payouts were timed); and eight unpaced threads drew

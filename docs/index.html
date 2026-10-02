@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20261002a">
+<link rel="stylesheet" href="style.css?v=20261002b">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
 <link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
 <link rel="apple-touch-icon" href="brand/icon-180.png?v=20260923c">
@@ -127,11 +127,12 @@
         and sell.</p>
       <p><b>A and B.</b> Fund A copies every signal. Fund B copies only markets scheduled to end within 2 days, so
         its money comes back and gets used again. A bet that finds no cash is counted as missed.</p>
-      <p><b>How real it is.</b> Paper only: nothing is traded. The pipeline replays the whales' trades every few
-        hours, in time order and to the second, with the whale list as it stood at the start of each stretch, so
-        it trades exactly as a bot watching live would have. The same-second price is the best case; each bet is
-        also scored as if copied a minute late, and that number is closer to what a person acting on an alert
-        gets. The funds opened empty on 2 Oct 2026, with no backfill.</p>
+      <p><b>How real it is.</b> Paper only: nothing is traded. Each update (every 15 minutes once the timer is on,
+        otherwise every few hours) replays the whales' trades since the last one, in time order and to the second,
+        with the whale list as it stood at the start of each stretch, so it trades exactly as a bot watching live
+        would have. "Being copied right now" previews the trades since the last update. The same-second price is
+        the best case; each bet is also scored as if copied a minute late, and that number is closer to what a
+        person acting on an alert gets. The funds opened empty on 2 Oct 2026, with no backfill.</p>
       <p><b>What it cannot see.</b> Only the buys it watched: if a whale already held the outcome, a sale counts
         against the part the fund copied. A whale leaving by merging both sides instead of selling is not seen,
         and the copy holds to the end.</p>
@@ -416,6 +417,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20261002a" type="module"></script>
+<script src="app.js?v=20261002b" type="module"></script>
 </body>
 </html>

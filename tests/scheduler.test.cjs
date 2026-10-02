@@ -17,6 +17,15 @@ test('scheduler dispatches main only after successful idle checks',async()=>{
     return {ok:true,json:async()=>({workflow_runs:[]})};
   });assert.equal(posts,1);
 });
+test('scheduler times the paper-fund job, not the full rebuild',async()=>{
+  const {refresh}=await ready;const urls=[];
+  assert.match(await refresh({GITHUB_TOKEN:'test'},async(url,options)=>{
+    urls.push(url);
+    if(options.method==='POST')return {status:204};
+    return {ok:true,json:async()=>({workflow_runs:[]})};
+  }),/paper funds dispatched/);
+  assert.ok(urls.length>1&&urls.every(u=>u.includes('/actions/workflows/fund.yml/')),urls.join(' '));
+});
 test('scheduler refuses missing credentials or failed run lookup',async()=>{
   const {refresh}=await ready;
   await assert.rejects(refresh({},()=>{throw Error('must not call');}),/secret/);

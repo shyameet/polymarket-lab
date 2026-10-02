@@ -1,4 +1,4 @@
-name = "whale-lab-refresh"
+name = "whale-lab-fund-timer"
 main = "src/index.js"
 compatibility_date = "2026-01-01"
 workers_dev = false
@@ -10,4 +10,4 @@ crons = ["*/15 * * * *"]
 enabled = true
 
 # GITHUB_TOKEN must be installed with `wrangler secret put GITHUB_TOKEN`.
-# Fine-grained token: only shyameet/polymarket-lab, Actions: write.
+# Fine-grained token: only shyameet/polymarket-lab, Actions: read and write.

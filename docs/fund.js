@@ -1,9 +1,11 @@
 /* Paper fund — two $1,000 paper accounts that copy the worth-following whales by rule.
  *
  * pipeline/pm/fund.py replays every whale fill since its last run, in time order,
- * the way a bot watching live would have traded it, and writes data/fund/fund.json.
- * This view only reads that file. There is no live top-up here on purpose: a
- * fund's book has to come from one ledger, or the numbers stop adding up.
+ * the way a bot watching live would have traded it, and writes data/fund/fund.json
+ * (every 15 minutes once the timer in scheduler/ is on). The books come from that
+ * one ledger only. The "Being copied right now" strip is a preview: it reads the
+ * whales' trades since the last update through the relay and applies the same
+ * rules, so what the next update will book is visible before it lands.
  *
  * Every copy is filled at the whale's own price in the same second — the best
  * case. Beside it sits the same trade copied a minute late, so the cost of a real
@@ -14,8 +16,57 @@ const IST_S = 19_800;                       // +05:30, no daylight saving
 const istDay = (ts) => new Date((ts + IST_S) * 1000).toISOString().slice(0, 10);
 const istClock = (ts) => new Date((ts + IST_S) * 1000).toISOString().slice(11, 16);
 const POLL_MS = 30_000;
+const LIVE_EVERY_MS = 10 * 60_000;          // ~200 relay requests a check, so not more often
+const SIGNAL_USD = 100;                     // the fund's signal: $100 of one outcome in one day
+const STAKE = 10;
 const COLOR_SEL = '#e97132';                // the brand orange: the fund being read
 const COLOR_OTHER = '#8a8780';              // the other fund, in neutral grey
+
+/** Relay REST URL. The nonce misses the upstream 5-minute CDN cache (as in recap.js). */
+export function relayURLFor(relay, host, path, params, nowMs = Date.now()) {
+  const u = new URL(`${relay.replace(/\/+$/, '')}/api/${host}${path}`);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
+  u.searchParams.set('_', String(nowMs));
+  return u.href;
+}
+
+/** Whale fills after `since` -> what the next update will most likely book, by the
+ *  fund's own rules. rows: /activity rows with `wallet` and `name` added.
+ *  held: token -> fund codes already holding it. copying: `${wallet}|${token}` ->
+ *  fund codes whose copy follows that whale. A buy signal is a whale's buys of one
+ *  outcome in one India-time day reaching $100, counted from `since` only (a whale
+ *  part-way there before `since` is missed here, not by the fund, which carries
+ *  the earlier part). Only the first whale to cross on an outcome is copied. */
+export function pendingMoves(rows, since, held = new Map(), copying = new Map()) {
+  const fills = rows.filter((r) => r.type === 'TRADE' && Number(r.timestamp) > since
+    && Number(r.size) > 0 && r.asset)
+    .sort((a, b) => a.timestamp - b.timestamp || (a.side === 'BUY' ? -1 : 1));
+  const eps = new Map(), signals = new Map(), sells = [];
+  for (const r of fills) {
+    const size = Number(r.size), tok = String(r.asset);
+    const usd = Number(r.usdcSize) || size * (Number(r.price) || 0);
+    const price = Number(r.price) || usd / size;
+    const base = { wallet: r.wallet, name: r.name || '', token: tok, condition: r.conditionId || '',
+      outcome: r.outcome || '', title: r.title || '', slug: r.slug || '', ts: Number(r.timestamp), price };
+    if (r.side === 'SELL') {
+      const funds = copying.get(`${r.wallet}|${tok}`);
+      if (funds?.size) sells.push({ ...base, usd, funds: [...funds].sort() });
+      continue;
+    }
+    if (r.side !== 'BUY' || base.condition.length !== 66 || (!base.outcome && / AND /.test(base.title))) continue;
+    const key = `${r.wallet}|${tok}|${istDay(base.ts)}`;
+    const ep = eps.get(key) || { usd: 0, done: false };
+    ep.usd += usd;
+    eps.set(key, ep);
+    if (ep.done || ep.usd < SIGNAL_USD) continue;
+    ep.done = true;
+    if (!(price > 0.001 && price < 0.999)) continue;
+    const s = signals.get(tok);
+    if (s) { s.others += 1; continue; }
+    signals.set(tok, { ...base, usd: ep.usd, others: 0, held: [...(held.get(tok) || [])].sort() });
+  }
+  return { signals: [...signals.values()], sells };
+}
 
 /** Unix seconds of India midnight starting the day that contains ts. */
 export function istMidnight(ts) {
@@ -76,11 +127,12 @@ const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
 const tone = (v) => (v == null || Math.abs(v) < 0.005 ? 'mut' : v > 0 ? 'pos' : 'neg');
 
 export function initFund(ctx) {
-  const { state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn, openDrawer, CAT_LABEL } = ctx;
+  const { state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn, openDrawer, CAT_LABEL,
+    relayURL } = ctx;
   let saved = 'A';
   try { saved = localStorage.getItem('whaleLab.fund') || 'A'; } catch { /* private window: default */ }
   const R = { doc: null, missing: false, sel: saved, closedFilter: '', showOpen: 20, showClosed: 30,
-    allDays: false, polledAt: 0 };
+    allDays: false, polledAt: 0, live: null, liveBusy: false, liveAll: false };
   const root = document.querySelector('#fund-root');
   const now = () => Math.floor(Date.now() / 1000);
   const when = (ts) => (istDay(ts) === istDay(now()) ? istClock(ts) : `${shortDate(istDay(ts))} ${istClock(ts)}`);
@@ -99,6 +151,139 @@ export function initFund(ctx) {
       R.missing = true;
       if (!R.doc) render();
     }
+  }
+
+  /* ── live preview: the whales' trades since the last update, through the relay ── */
+  async function liveCheck(force = false) {
+    const F = R.doc, relay = relayURL?.();
+    if (!F || !relay || R.liveBusy || (document.hidden && !force)) return;
+    const since = F.cursor;
+    if (!force && R.live && R.live.since === since && Date.now() - R.live.at < LIVE_EVERY_MS) return;
+    R.liveBusy = true;
+    render();
+    const until = now();
+    const held = new Map(), copying = new Map();
+    const add = (m, k, code) => { if (!m.has(k)) m.set(k, new Set()); m.get(k).add(code); };
+    for (const [code, f] of Object.entries(F.funds)) {
+      for (const p of f.open) {
+        if (!p.token) continue;
+        add(held, p.token, code);
+        add(copying, `${p.whale}|${p.token}`, code);
+      }
+    }
+    // the whales the funds follow, plus any it still holds a copy of
+    const whales = new Map(state.whales.filter((c) => c.verdict === 'CANDIDATE')
+      .map((c) => [(c.wallet || '').toLowerCase(), c.name || '']));
+    for (const k of copying.keys()) if (!whales.has(k.split('|')[0])) whales.set(k.split('|')[0], '');
+    const get = async (host, path, params) => {
+      const r = await fetch(relayURLFor(relay, host, path, params),
+        { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    };
+    const rows = [];
+    let failed = 0;
+    const queue = [...whales.entries()];
+    await Promise.all(Array.from({ length: 6 }, async () => {
+      while (queue.length) {
+        const [wallet, name] = queue.shift();
+        try {
+          const page = await get('data', '/activity',
+            { user: wallet, limit: 500, type: 'TRADE', start: since + 1, end: until });
+          for (const r of Array.isArray(page) ? page : []) rows.push({ ...r, wallet, name: name || r.name || '' });
+        } catch { failed += 1; }
+      }
+    }));
+    const moves = pendingMoves(rows, since, held, copying);
+    // each new signal's market: its price now, and its end date (fund B's rule)
+    const markets = new Map();
+    const cq = [...new Set(moves.signals.map((s) => s.condition))].slice(0, 30);
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (cq.length) {
+        const cid = cq.shift();
+        try {
+          const m = await get('clob', `/markets/${cid}`, {});
+          markets.set(cid, { end: m.end_date_iso ? Math.floor(Date.parse(m.end_date_iso) / 1000) : null,
+            prices: new Map((m.tokens || []).map((t) => [String(t.token_id), Number(t.price)])) });
+        } catch { /* shown without its price and end date */ }
+      }
+    }));
+    R.live = { since, until, at: Date.now(), ...moves, markets, failed, asked: whales.size };
+    R.liveBusy = false;
+    render();
+  }
+
+  function fundCalls(s, L) {
+    const m = L.markets.get(s.condition);
+    return Object.entries(R.doc.funds).map(([code, f]) => {
+      if (s.held.includes(code)) return [`${code}: already holds it`, 'tag'];
+      if (code === 'B' && !m) return ['B: end date unknown', 'tag'];
+      if (code === 'B' && (m.end == null || m.end - s.ts > 48 * 3600)) return ['B: ends later, skips', 'tag'];
+      if (f.cash < STAKE + 0.5) return [`${code}: no cash, misses`, 'tag neg'];
+      return [`${code} buys $${STAKE}`, 'tag pos'];
+    });
+  }
+
+  function liveRow(r, L) {
+    const li = el('li', 'row rc-row');
+    const who = el('div', 'who');
+    who.append(whaleName(r.wallet, r.name), el('span', `side ${r.kind === 'buy' ? 'BUY' : 'SELL'}`,
+      r.kind === 'buy' ? 'BOUGHT' : 'SOLD'));
+    if (r.kind === 'buy') {
+      for (const [text, cls] of fundCalls(r, L)) who.append(el('span', cls, text));
+      if (r.others) who.append(el('span', 'tag stack', `+${r.others} more ${r.others === 1 ? 'whale' : 'whales'}`));
+    } else {
+      for (const code of r.funds) who.append(el('span', 'tag pos', `${code} sells with it`));
+    }
+    li.append(who, el('div', 'headline-num', usd(r.usd)));
+    const says = el('div', 'says');
+    const nowPx = L.markets.get(r.condition)?.prices.get(r.token);
+    says.append(el('span', 'when', when(r.ts)), r.kind === 'buy'
+      ? ` "${r.outcome || '?'}" at ${cents(r.price)}${nowPx != null ? ` · now ${cents(nowPx)}` : ''}`
+      : ` "${r.outcome || '?'}" at ${cents(r.price)}: the copy sells the same share of what it holds`);
+    li.append(says, marketLine(r));
+    return li;
+  }
+
+  function livePanel(F) {
+    const box = el('div', 'rc-new fd-live');
+    const head = el('div', 'rc-htop');
+    head.append(el('h3', null, 'Being copied right now'));
+    const btn = el('button', 'btn small', R.liveBusy ? 'Checking…' : 'Check now');
+    btn.type = 'button';
+    btn.disabled = R.liveBusy || !relayURL?.();
+    btn.addEventListener('click', () => liveCheck(true));
+    head.append(btn);
+    box.append(head);
+    if (!relayURL?.()) {
+      box.append(el('p', 'tiny', 'The live check needs the relay (see Data source).'));
+      return box;
+    }
+    const L = R.live;
+    if (!L || L.since !== F.cursor) {
+      box.append(el('p', 'tiny', R.liveBusy ? `Reading the whales' trades since ${when(F.cursor)} IST…`
+        : 'Not checked yet.'));
+      return box;
+    }
+    box.append(el('p', 'tiny', `Whale trades since the last update (${when(L.since)} IST), checked `
+      + `${ago(Math.floor(L.at / 1000))} ago${L.failed ? ` · ${L.failed} whales did not answer` : ''}. A preview: the `
+      + 'next update books these at the times and prices shown.'));
+    const rows = [...L.signals.map((s) => ({ ...s, kind: 'buy' })), ...L.sells.map((s) => ({ ...s, kind: 'sell' }))]
+      .sort((a, b) => b.ts - a.ts);
+    if (!rows.length) {
+      box.append(el('p', 'tiny', 'No new signals or exits since then.'));
+      return box;
+    }
+    const ul = el('ul', 'tape');
+    for (const r of rows.slice(0, R.liveAll ? 80 : 8)) ul.append(liveRow(r, L));
+    box.append(ul);
+    if (rows.length > 8) {
+      const more = el('button', 'btn small', R.liveAll ? 'Show fewer' : `Show all ${Math.min(80, rows.length)}`);
+      more.type = 'button';
+      more.addEventListener('click', () => { R.liveAll = !R.liveAll; render(); });
+      box.append(more);
+    }
+    return box;
   }
 
   /* ── pieces ── */
@@ -432,11 +617,12 @@ export function initFund(ctx) {
     const cards = el('div', 'fd-cards');
     for (const [code, f] of Object.entries(F.funds)) cards.append(card(code, f));
     root.append(cards);
+    root.append(livePanel(F));
     const f = F.funds[R.sel];
     const nothingYet = Object.values(F.funds).every((x) => !x.copied && !x.open_n && !x.closed_n);
     if (nothingYet) {
-      root.append(el('p', 'empty', 'No copies yet. The funds read the whales\' trades on each pipeline run, every '
-        + 'few hours, and time every copy to the second the whale traded, so nothing is lost by waiting.'));
+      root.append(el('p', 'empty', 'No copies in the books yet. Each update replays the whales\' trades since the '
+        + 'last one and times every copy to the second the whale traded, so nothing is lost by waiting.'));
     }
     root.append(chart(F));
     const head = el('h3', 'fd-sel', `${R.sel} · ${f.name}`);
@@ -452,12 +638,15 @@ export function initFund(ctx) {
   }
 
   // Called every second by the app while this view is open; reads the file at
-  // most every 30 s, and not at all in a background tab after the first load.
+  // most every 30 s and the whales' newest trades at most every 10 min (or when
+  // a new update moves the starting point), never in a background tab after the
+  // first load.
   function tick() {
     if (state.view !== 'fund') return;
     const first = !R.polledAt;
     if (document.hidden && !first) return;
     if (first || Date.now() - R.polledAt > POLL_MS) { R.polledAt = Date.now(); load(); }
+    if (!document.hidden && state.whales.length) liveCheck();
   }
 
   return { render, tick, state: R, generatedAt: () => R.doc?.generated_at };
