@@ -398,6 +398,51 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 #view-recap .tape+.btn{margin-top:10px}
 .rc-new>.btn,.rc-near>.btn{margin-top:10px}
 
+/* ── paper fund ─────────────────────────────────────────────────────── */
+.fd-status{margin:0 0 12px}
+.fd-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.fd-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;cursor:pointer;min-width:0;transition:border-color .15s}
+.fd-card:hover{border-color:#525252}
+.fd-card:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.fd-card.sel{border-color:var(--orange-line);box-shadow:inset 0 0 0 1px var(--orange-line)}
+.fd-name{display:flex;align-items:center;gap:8px;font-weight:650;font-size:15px;min-width:0}
+.fd-code{font-family:var(--mono);font-size:12px;font-weight:750;border:1px solid var(--line);
+  border-radius:6px;padding:1px 7px;color:var(--dim)}
+.fd-card.sel .fd-code{border-color:var(--orange-line);color:var(--orange);background:var(--orange-wash)}
+.fd-eq{font-family:var(--mono);font-size:32px;font-weight:750;letter-spacing:-.02em;margin-top:6px;
+  line-height:1.1;font-variant-numeric:tabular-nums}
+.fd-pnl{font-family:var(--mono);font-size:14.5px;margin-top:3px}
+.fd-mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px;
+  padding-top:10px;border-top:1px solid var(--line-2)}
+.fd-mini span{display:block;font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
+.fd-mini b{font-family:var(--mono);font-size:15px;font-weight:650;white-space:nowrap}
+.fd-facts{font-size:13.5px;color:var(--dim);margin:8px 0 0;line-height:1.5}
+.fd-chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:12px}
+.fd-chart h3{margin-top:0}
+.fd-chart svg{display:block;width:100%;height:170px;overflow:visible}
+.fd-axis{display:flex;justify-content:space-between;gap:10px;font-family:var(--mono);font-size:11.5px;
+  color:var(--faint);margin-top:5px}
+.fd-legend{display:flex;gap:6px 18px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:8px}
+.fd-sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+.fd-sw.dash{background:repeating-linear-gradient(90deg,#5a5852 0 4px,transparent 4px 7px)}
+.fd-sel{font-size:17px;margin:18px 0 4px}
+.fd-full{border:1px solid var(--gold-line);background:var(--gold-wash);color:var(--fg);
+  border-radius:10px;padding:9px 12px}
+.fd-tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--radius);margin-bottom:8px}
+.fd-table{width:100%;border-collapse:collapse;font-size:14px}
+.fd-table th{font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;
+  text-align:right;font-weight:600;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.fd-table td{padding:9px 12px;border-bottom:1px solid var(--line-2);text-align:right;
+  font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.fd-table th:first-child,.fd-table td:first-child{text-align:left;font-family:var(--sans)}
+.fd-table tr:last-child td{border-bottom:0}
+.fd-table small{margin-left:6px;font-size:12px}
+.fd-late{margin:4px 0 6px}
+#view-fund .tape+.btn{margin-top:10px}
+
 /* ── phones: sections in a bottom bar, data on the first screen ─────── */
 @media (max-width:760px){
   :root{--gutter:14px;--tabbar:calc(64px + env(safe-area-inset-bottom))}
@@ -451,6 +496,14 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
   .rc-frac{font-size:34px}
   .rc-bar{grid-template-columns:96px minmax(0,1fr) 40px;gap:8px}
   .rc-bl{font-size:12px}
+  .fd-cards{grid-template-columns:1fr}
+  .fd-eq{font-size:28px}
+  .fd-chart{padding:12px 12px}
+  .fd-table{font-size:12.5px}
+  .fd-table th{font-size:10.5px;letter-spacing:.02em}
+  .fd-table th,.fd-table td{padding:8px 6px}
+  .fd-table td:first-child{white-space:normal;min-width:64px}
+  .fd-table small{display:block;margin-left:0}
 }
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}

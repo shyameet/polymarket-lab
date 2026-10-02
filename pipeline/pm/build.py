@@ -24,6 +24,7 @@ from . import api
 from .crypto_flows import build_crypto_flows
 from .daily import build_daily
 from .feed import build_feed
+from .fund import build_fund
 from .markets import build_markets_soon
 from .positions import build_positions
 from .insights import build_insights
@@ -228,6 +229,8 @@ def main() -> int:
                     help="skip the large-stablecoin-transfer sweep (Blockscout)")
     ap.add_argument("--no-daily", action="store_true",
                     help="skip the per-day recap of the worth-following whales")
+    ap.add_argument("--no-fund", action="store_true",
+                    help="skip the two paper funds that copy the worth-following whales")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -337,6 +340,17 @@ def main() -> int:
                                         out_dir=os.path.join(args.out, "daily"), log=log)
         except Exception as e:  # noqa: BLE001 - optional section, never blocks a publish
             log(f"  ! daily recap failed, skipping this cycle: {e}")
+
+    # Two $1,000 paper funds that copy those whales by fixed rules. Their book
+    # carries over between runs in data/fund/state.json, so a failed cycle loses
+    # nothing: the next run replays the same window. The clock is read here, not
+    # at t0, because settling a market waits on the moment it was first seen.
+    if not args.no_fund:
+        try:
+            meta["fund"] = build_fund(ordered, now_ts=int(time.time()), workers=args.workers,
+                                      out_dir=os.path.join(args.out, "fund"), log=log)
+        except Exception as e:  # noqa: BLE001 - optional section, never blocks a publish
+            log(f"  ! paper fund failed, skipping this cycle: {e}")
 
     if not args.no_markets:
         markets_soon = build_markets_soon(now_ts=now_ts, log=log)

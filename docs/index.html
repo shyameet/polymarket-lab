@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Polymarket Whale Lab</title>
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
-<link rel="stylesheet" href="style.css?v=20260924a">
+<link rel="stylesheet" href="style.css?v=20261002a">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
 <link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
 <link rel="apple-touch-icon" href="brand/icon-180.png?v=20260923c">
@@ -80,6 +80,7 @@
   <button class="sub" data-tab="whales" data-view="whales" role="tab" type="button">Who to follow</button>
   <button class="sub" data-tab="whales" data-view="research" role="tab" type="button">Topic research</button>
   <button class="sub" data-tab="recap" data-view="recap" role="tab" type="button">Daily recap</button>
+  <button class="sub" data-tab="recap" data-view="fund" role="tab" type="button">Paper fund</button>
 </div>
 
 <div class="toolbar">
@@ -110,6 +111,33 @@
     </div>
   </details>
   <div id="recap-root"></div>
+</section>
+
+<section id="view-fund" class="view" hidden>
+  <details class="about">
+    <summary>Two $1,000 paper funds that copy the proven whales by themselves — how they trade</summary>
+    <div class="about-body">
+      <p><b>The signal.</b> When a whale rated <b>Worth following</b> puts $100 or more into one outcome in one
+        India-time day, the fund buys <b>$10</b> of the same outcome at the same price, in the same second. Every
+        bet is $10, win or lose, whatever the fund is worth. If the fund already holds that outcome (another whale
+        got there first), the signal is skipped.</p>
+      <p><b>Managing it.</b> The fund follows the whale it copied: when that whale sells part of what it bought,
+        the fund sells the same share at the same price. Otherwise it holds to the end and is paid $1 or $0 a share
+        when the market settles, and that cash is ready for the next signal. Taker fees are charged on every buy
+        and sell.</p>
+      <p><b>A and B.</b> Fund A copies every signal. Fund B copies only markets scheduled to end within 2 days, so
+        its money comes back and gets used again. A bet that finds no cash is counted as missed.</p>
+      <p><b>How real it is.</b> Paper only: nothing is traded. The pipeline replays the whales' trades every few
+        hours, in time order and to the second, with the whale list as it stood at the start of each stretch, so
+        it trades exactly as a bot watching live would have. The same-second price is the best case; each bet is
+        also scored as if copied a minute late, and that number is closer to what a person acting on an alert
+        gets. The funds opened empty on 2 Oct 2026, with no backfill.</p>
+      <p><b>What it cannot see.</b> Only the buys it watched: if a whale already held the outcome, a sale counts
+        against the part the fund copied. A whale leaving by merging both sides instead of selling is not seen,
+        and the copy holds to the end.</p>
+    </div>
+  </details>
+  <div id="fund-root"></div>
 </section>
 
 <section id="view-research" class="view" hidden>
@@ -388,6 +416,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20260924a" type="module"></script>
+<script src="app.js?v=20261002a" type="module"></script>
 </body>
 </html>

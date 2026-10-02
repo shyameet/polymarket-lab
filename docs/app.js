@@ -1738,12 +1738,12 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research', 'recap'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research', 'recap', 'fund'];
 // Seven views grouped into four sections. Closing soon is the default landing:
 // it's the owner's stated main use, and it's always populated, where the live
 // tape can open on an empty two-minute window.
 const TAB_OF = { soon: 'markets', flows: 'markets', trades: 'live', positions: 'live',
-  whales: 'whales', research: 'whales', recap: 'recap', mine: 'mine' };
+  whales: 'whales', research: 'whales', recap: 'recap', fund: 'recap', mine: 'mine' };
 const lastViewOfTab = { markets: 'soon', live: 'trades', whales: 'whales', recap: 'recap', mine: 'mine' };
 
 function showView(view) {
@@ -1766,7 +1766,7 @@ function showView(view) {
     b.setAttribute('aria-selected', String(b.dataset.view === view));
   });
   $('#subnav').hidden = subs < 2;
-  $('#follow-toggle').hidden = view === 'flows' || view === 'mine';
+  $('#follow-toggle').hidden = view === 'flows' || view === 'mine' || view === 'fund';
   VIEWS.forEach((v) => { $(`#view-${v}`).hidden = view !== v; });
   if (view === 'trades') { state.dirty = true; state.tapeForce = true; }
   if (view === 'positions') renderPositions();
@@ -1775,6 +1775,7 @@ function showView(view) {
   if (view === 'flows') renderCryptoFlows();
   if (view === 'research') state.research?.render();
   if (view === 'recap') { state.recapUI?.render(); state.recapUI?.tick(); }
+  if (view === 'fund') { state.fundUI?.render(); state.fundUI?.tick(); }
   paintFreshness();
   state.liveRefresh?.tick();
 }
@@ -1786,14 +1787,16 @@ document.querySelectorAll('.sub').forEach((b) => b.addEventListener('click', () 
 
 // One short line with a coloured dot instead of a four-line paragraph; the full
 // caveat stays available as the hover title and in each view's "about" note.
-const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers', recap: 'Recap' };
+const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers', recap: 'Recap',
+  fund: 'Paper funds' };
 function paintFreshness() {
   const box = $('#section-freshness');
   if (!box) return;
   let text, level, title;
   if (SNAPSHOT_VIEWS[state.view]) {
     const ts = { whales: state.meta?.generated_at, research: state.insights?.generated_at,
-      flows: state.cryptoFlows?.generated_at, recap: state.recapUI?.generatedAt() }[state.view];
+      flows: state.cryptoFlows?.generated_at, recap: state.recapUI?.generatedAt(),
+      fund: state.fundUI?.generatedAt() }[state.view];
     const age = ts ? Date.now() / 1000 - ts : Infinity;
     level = age < 1800 ? 'ok' : age < 4 * 3600 ? 'stale' : 'old';
     text = ts ? `${SNAPSHOT_VIEWS[state.view]} updated ${ago(ts)} ago` : 'Loading saved data…';
@@ -1838,6 +1841,11 @@ import('./recap.js?v=20260924a').then(({initRecap}) => {
     marketLink, copyMarketBtn, openDrawer, CAT_LABEL});
   if (state.view === 'recap') { state.recapUI.render(); state.recapUI.tick(); }
 }).catch(() => { $('#recap-root').textContent = 'The recap could not load. Reload to retry.'; });
+import('./fund.js?v=20261002a').then(({initFund}) => {
+  state.fundUI = initFund({state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn,
+    openDrawer, CAT_LABEL});
+  if (state.view === 'fund') { state.fundUI.render(); state.fundUI.tick(); }
+}).catch(() => { $('#fund-root').textContent = 'The paper funds could not load. Reload to retry.'; });
 import('./research.js?v=20260924a').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
@@ -1956,6 +1964,7 @@ setInterval(() => {
   if (state.view === 'soon') renderMarketsSoon();
   if (state.view === 'positions') renderPositionStats();
   if (state.view === 'recap') state.recapUI?.tick();
+  if (state.view === 'fund') state.fundUI?.tick();
   state.liveRefresh?.tick();
   paintFreshness();
 }, 1000);

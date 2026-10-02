@@ -88,6 +88,32 @@ carries each token's price and winner flag. A trap found building it, verified
 2026-09-23: combos/parlays carry a synthetic 64-character condition id with no CLOB
 market behind it.
 
+### Paper funds (`pipeline/pm/fund.py` → `docs/data/fund/`)
+
+Two $1,000 paper accounts that copy the **Worth following** whales by fixed rules,
+opened empty on 2026-10-02 with no backfill. A signal is a whale's buys of one
+outcome on one India-time day reaching $100; the fund buys a flat **$10** at that
+fill's price, in the same second. It then follows the whale it copied: a sale of
+part of what the whale bought sells the same share at the same price, otherwise it
+holds and is paid $1 / $0 when the market settles. One position per outcome; a
+signal that finds no cash is counted as missed. Fund A copies every signal, fund B
+only markets scheduled to end within 48 hours. Taker fees on every buy and sell.
+
+Each run replays the whales' fills since the last run in time order, using the
+whale list saved by the previous run (no look-ahead), with settlements as events in
+the same timeline, at the moment each market closed, so the cash is back for the
+next signal. A market pays out only once the replay has passed its close, so a sale
+minutes before the end is followed, not held to $1 / $0. `state.json` carries the
+book between runs; `fund.json` is what the page reads. Every copy is also scored a
+minute late (CLOB price history at +60 s): in 5-minute "Up or Down" markets that
+minute moves the price by up to 30¢, and the per-topic table shows it.
+
+Two traps found building it, verified 2026-10-02: settling only at the end of a run
+starved fund A of cash it would have had back hours earlier (198 signals "missed"
+in a 6-hour replay, 140 once payouts were timed); and eight unpaced threads drew
+HTTP 429 from the CLOB, which would have left markets undated and silently skipped
+by fund B. Lookups are now paced (CLOB 10/s, Gamma 5/s) and a 429 is waited out.
+
 ### Run locally
 
 ```bash
