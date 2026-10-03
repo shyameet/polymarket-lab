@@ -1,4 +1,4 @@
-"""PAPER FUND -- two $1,000 paper accounts that copy the proven whales by themselves.
+"""PAPER FUNDS -- $1,000 paper accounts that copy the proven whales by themselves.
 
 WHY THIS EXISTS
 ---------------
@@ -28,6 +28,16 @@ THE RULES, FIXED ON DAY ONE (the owner's choices that day)
 * Fund A copies every signal. Fund B copies only markets scheduled to end within
   48 hours, so its cash comes back and gets used again. (A scheduled end that has
   already passed while the market is still open counts as ending soon.)
+* Fund C (added 2026-10-03 at the owner's request) copies every signal except
+  crypto and esports markets -- the topics crypto, csgo, valorant and esports as
+  feed.categorize names them, the same labels as the page's topic tables. Those
+  four topics were picked after a day of A's results, so C's own record from its
+  opening is the only fair test of the idea.
+
+A FUND ADDED LATER opens empty, with its own $1,000, at the first run that knows
+it, and copies only signals after that moment (no backfill). It shares nothing
+with the other funds but the signal itself: their cash, bets and history are
+untouched (test_fund.py checks that A and B come out identical either way).
 
 NO LOOK-AHEAD
 -------------
@@ -78,11 +88,14 @@ SIGNAL_USD = 100.0
 LAG_S = 600              # replay only fills at least 10 minutes old: /activity indexes late
 LATE_S = 60              # the "copied a minute late" shadow price
 KEEP_CLOSED = 300        # closed trades kept in full per fund; the totals are kept for good
-FUNDS = {"A": {"name": "Every bet", "max_hours": None},
-         "B": {"name": "Ends within 2 days", "max_hours": 48}}
+FUNDS = {"A": {"name": "Every bet", "max_hours": None, "exclude": ()},
+         "B": {"name": "Ends within 2 days", "max_hours": 48, "exclude": ()},
+         "C": {"name": "No crypto or esports", "max_hours": None,
+               "exclude": ("crypto", "csgo", "valorant", "esports")}}
 RULES = {"start_cash": START_CASH, "stake": STAKE, "signal_usd": SIGNAL_USD,
          "fee_rate": FEE_RATE, "late_s": LATE_S, "lag_s": LAG_S,
-         "funds": {k: v["name"] for k, v in FUNDS.items()}}
+         "funds": {k: {"name": v["name"], "max_hours": v["max_hours"], "exclude": list(v["exclude"])}
+                   for k, v in FUNDS.items()}}
 DAY_KEYS = ("copied", "missed", "closed", "won", "realized", "base",
             "late", "late_n", "late_same", "fees")
 CAT_KEYS = ("closed", "won", "realized", "late", "late_n", "late_same")
@@ -108,15 +121,28 @@ def is_combo(condition: str, outcome: str, title: str) -> bool:
 
 # ─────────────────────────── state ──────────────────────────────────────────
 
+def new_fund(now: int) -> dict:
+    return {"cash": START_CASH, "open": [], "closed": [], "days": {}, "cats": {},
+            "points": [[now, START_CASH]], "missed_cash": 0, "skipped_held": 0,
+            "skipped_filter": 0, "started": now}
+
+
 def new_state(now: int, whales: list[dict]) -> dict:
     # Copying starts the moment the whale list is taken, never before it: the
     # first window is (now, next run - LAG_S]. (The first live opening started
     # LAG_S earlier and copied three minutes of fills it had no list for yet.)
     return {"v": 1, "started": now, "cursor": now, "whales": whales,
             "episodes": {}, "seq": 0, "last_run": None,
-            "funds": {k: {"cash": START_CASH, "open": [], "closed": [], "days": {}, "cats": {},
-                          "points": [[now, START_CASH]], "missed_cash": 0,
-                          "skipped_held": 0, "skipped_filter": 0} for k in FUNDS}}
+            "funds": {k: new_fund(now) for k in FUNDS}}
+
+
+def open_new_funds(state: dict, now: int) -> list[str]:
+    """Funds named in FUNDS but missing from a saved state open now, empty, and
+    copy only signals after this moment. The funds already there are untouched."""
+    added = [k for k in FUNDS if k not in state["funds"]]
+    for k in added:
+        state["funds"][k] = new_fund(now)
+    return added
 
 
 def _bucket(table: dict, key: str, keys: tuple) -> dict:
@@ -275,10 +301,18 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
             continue
         signals += 1
         m = market(cond) or {}
+        slug = r.get("slug") or ""
+        cat = categorize(title, slug)
         for code, rule in FUNDS.items():
-            f = funds[code]
+            f = funds.get(code)
+            # a fund copies only signals after it opened (one added later starts empty)
+            if f is None or ts <= f.get("started", 0):
+                continue
             if any(p["token"] == tok for p in f["open"]):
                 f["skipped_held"] += 1
+                continue
+            if cat in rule["exclude"]:
+                f["skipped_filter"] += 1
                 continue
             if rule["max_hours"] is not None:
                 end = m.get("end_ts")
@@ -296,9 +330,8 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
             d["copied"] += 1
             d["fees"] += fe
             state["seq"] += 1
-            slug = r.get("slug") or ""
             p = {"id": state["seq"], "token": tok, "condition": cond, "outcome": outcome,
-                 "title": title, "slug": slug, "category": categorize(title, slug),
+                 "title": title, "slug": slug, "category": cat,
                  "whale": w, "whale_name": r.get("name") or "", "ts": ts, "price": price,
                  "shares": shares, "fee": fe, "whale_held": ep["shares"], "left": 1.0,
                  "sales": [], "late_entry": price_later(tok, ts + LATE_S), "end_ts": m.get("end_ts")}
@@ -366,7 +399,8 @@ def _rounded(row: dict) -> dict:
 def view(state: dict, now: int) -> dict:
     out = {"generated_at": now, "started": state["started"], "cursor": state["cursor"],
            "last_run": state.get("last_run"), "rules": RULES, "funds": {}}
-    for code, f in state["funds"].items():
+    for code in sorted(state["funds"]):
+        f = state["funds"][code]
         pts = f["points"]
         peak, dd = START_CASH, 0.0
         for _, v in pts:
@@ -402,7 +436,8 @@ def view(state: dict, now: int) -> dict:
                       key=lambda c: -c["closed"])
         unreal = sum(r["pnl_now"] for r in open_rows)
         out["funds"][code] = {
-            "name": FUNDS[code]["name"], "start": START_CASH, "equity": _r(pts[-1][1]),
+            "name": FUNDS[code]["name"], "started": f.get("started", state["started"]),
+            "start": START_CASH, "equity": _r(pts[-1][1]),
             "pnl": _r(pts[-1][1] - START_CASH), "cash": _r(f["cash"]),
             "realized": _r(tot["realized"]), "unrealized": _r(unreal),
             "open_n": len(f["open"]), "in_bets": _r(sum(_value(p) for p in f["open"])),
@@ -549,8 +584,11 @@ def build_fund(cards: list[dict], *, now_ts: int, out_dir: str, workers: int = 8
 
     if state is None:
         state = new_state(now_ts, whales_now)
-        log(f"  fund: opened two ${START_CASH:,.0f} paper funds, following {len(whales_now)} whales")
+        log(f"  fund: opened {len(FUNDS)} ${START_CASH:,.0f} paper funds, following {len(whales_now)} whales")
     else:
+        for code in open_new_funds(state, now_ts):
+            log(f"  fund: opened fund {code} ({FUNDS[code]['name']}) with ${START_CASH:,.0f}; "
+                "it copies signals from now on")
         start, until = state["cursor"], now_ts - LAG_S
         signal = {w["wallet"] for w in state["whales"]}
         names = {w["wallet"]: w["name"] for w in state["whales"]}

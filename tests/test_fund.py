@@ -124,6 +124,80 @@ class FundB(unittest.TestCase):
         self.assertEqual(st['funds']['B']['open'], [])
 
 
+def titled(ts, title, asset, cond, **kw):
+    return {**fill(ts, 'BUY', 250, .4, asset=asset, cond=cond, **kw), 'title': title, 'slug': ''}
+
+
+def economics(f):
+    """A fund's book without position ids, which count positions across all funds."""
+    g = json.loads(json.dumps(f))
+    for rec in g['open'] + g['closed']:
+        rec.pop('id', None)
+    return g
+
+
+class FundC(unittest.TestCase):
+    TOPICS = ['Bitcoin Up or Down - October 3, 9:00AM-9:05AM ET',      # crypto
+              'Counter-Strike: Vitality vs NAVI (BO3)',                 # csgo
+              'Valorant: Sentinels vs Fnatic',                          # valorant
+              'Dota 2: Team Spirit vs Tundra - Game 1 Winner']          # esports
+
+    def test_skips_crypto_and_esports_and_copies_the_rest(self):
+        st = fresh()
+        rows = [titled(T + i, t, f'X{i}', '0x' + str(i) * 64) for i, t in enumerate(self.TOPICS)]
+        rows.append(fill(T + 9, 'BUY', 250, .4))                         # sports
+        step(st, rows, SIG, lambda c: {'end_ts': T + 3600}, no_late)
+        a, c = st['funds']['A'], st['funds']['C']
+        self.assertEqual(len(a['open']), 5)
+        self.assertEqual(([p['category'] for p in c['open']], c['skipped_filter']), (['sports'], 4))
+
+    def test_a_fund_added_later_copies_only_after_it_opens(self):
+        st = fresh()
+        del st['funds']['C']                                             # a book saved before C existed
+        self.assertEqual(fund.open_new_funds(st, T + 100), ['C'])
+        self.assertEqual(fund.open_new_funds(st, T + 200), [])
+        step(st, [fill(T + 50, 'BUY', 250, .4), fill(T + 300, 'BUY', 250, .4, asset='U1', cond=COND2)],
+             SIG, Markets(), no_late)
+        self.assertEqual([p['token'] for p in st['funds']['A']['open']], ['T1', 'U1'])
+        c = st['funds']['C']
+        self.assertEqual([p['token'] for p in c['open']], ['U1'])
+        self.assertEqual((c['started'], c['points'], c['skipped_filter']), (T + 100, [[T + 100, START_CASH]], 0))
+        self.assertAlmostEqual(c['cash'], START_CASH - entry_cost(.4))
+
+    def test_adding_c_leaves_a_and_b_exactly_as_they_were(self):
+        crypto = '0x' + 'c' * 64
+
+        def run(with_c):
+            st, m = fresh(), Markets()
+            if not with_c:
+                del st['funds']['C']
+            m.m[crypto] = {'tokens': {'X1': {'price': .5, 'winner': False}}, 'resolved': False, 'end_ts': T + 3600}
+            m.resolve(COND2, 'U1')
+            st['cursor'] = T + 1000
+            rows = [fill(T, 'BUY', 250, .4), titled(T + 5, self.TOPICS[0], 'X1', crypto),
+                    fill(T + 10, 'BUY', 300, .5, asset='U1', cond=COND2, wallet=W2),
+                    fill(T + 60, 'SELL', 100, .45), fill(T + 70, 'BUY', 300, .5, asset='T2', wallet=W2)]
+            step(st, rows, SIG, m, lambda tok, ts: .5, {COND2: T + 200}.get, T + 1000)
+            settle_and_mark(st, m, T + 1200, {COND2: T + 200}.get)
+            return st
+
+        with_c, without = run(True), run(False)
+        self.assertGreater(len(with_c['funds']['C']['open']) + len(with_c['funds']['C']['closed']), 0)
+        for code in ('A', 'B'):
+            self.assertEqual(economics(with_c['funds'][code]), economics(without['funds'][code]), code)
+
+    def test_the_page_gets_each_funds_opening_and_rules(self):
+        st = fresh()
+        del st['funds']['C']
+        fund.open_new_funds(st, T + 100)
+        v = view(st, T + 200)
+        self.assertEqual(list(v['funds']), ['A', 'B', 'C'])
+        self.assertEqual((v['funds']['A']['started'], v['funds']['C']['started']), (T - 3600, T + 100))
+        self.assertEqual(v['rules']['funds']['C']['exclude'], ['crypto', 'csgo', 'valorant', 'esports'])
+        self.assertEqual((v['rules']['funds']['B']['max_hours'], v['funds']['C']['name']),
+                         (48, 'No crypto or esports'))
+
+
 class FollowsTheWhale(unittest.TestCase):
     def test_sells_the_same_fraction_at_the_same_price(self):
         st, m = fresh(), Markets()
@@ -221,7 +295,7 @@ class Settlement(unittest.TestCase):
         self.assertEqual((p['mark'], p['resolved_seen']), (1.0, T + 1000))
         self.assertAlmostEqual(a['points'][-1][1], START_CASH - entry_cost(.4) + STAKE / .4, places=3)
         st['cursor'] = T + 600
-        self.assertEqual(settle_and_mark(st, m, T + 2000, {COND: T + 500}.get), 2)   # A and B
+        self.assertEqual(settle_and_mark(st, m, T + 2000, {COND: T + 500}.get), 3)   # A, B and C
         c = a['closed'][0]
         self.assertEqual((c['how'], c['payout'], c['close_ts']), ('settled', 1.0, T + 500))
         self.assertAlmostEqual(c['pnl'], STAKE / .4 - entry_cost(.4))
@@ -235,7 +309,7 @@ class Settlement(unittest.TestCase):
         st['cursor'] = T + 100
         self.assertEqual(settle_and_mark(st, m, T + 1000, {}.get), 0)
         st['cursor'] = T + 1000
-        self.assertEqual(settle_and_mark(st, m, T + 1600, {}.get), 2)               # A and B
+        self.assertEqual(settle_and_mark(st, m, T + 1600, {}.get), 3)               # A, B and C
         c = st['funds']['A']['closed'][0]
         self.assertEqual((c['payout'], c['won'], c['close_ts']), (0.0, False, T + 1000))
         self.assertAlmostEqual(c['pnl'], -entry_cost(.4))
@@ -332,7 +406,7 @@ class Run(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(fund, '_activity', side_effect=AssertionError('no fetch on day one')):
             out = fund.build_fund(self.CARDS, now_ts=T, out_dir=d, log=lambda m: None)
-            self.assertEqual(out, {'A': START_CASH, 'B': START_CASH})
+            self.assertEqual(out, {'A': START_CASH, 'B': START_CASH, 'C': START_CASH})
             st = json.loads(Path(d, 'state.json').read_text(encoding='utf-8'))
             self.assertEqual([w['wallet'] for w in st['whales']], [W1, W2])
             self.assertEqual(st['funds']['A']['points'], [[T, START_CASH]])
@@ -361,6 +435,27 @@ class Run(unittest.TestCase):
         self.assertEqual(len(st['funds']['A']['open']), 1)
         self.assertEqual([w['wallet'] for w in st['whales']], [W2])     # the list for the NEXT window
         self.assertEqual(st['last_run']['signals'], 1)
+
+    def test_a_saved_book_without_c_gets_c_on_the_next_run(self):
+        m = Markets()
+        with tempfile.TemporaryDirectory() as d:
+            st = fresh()
+            del st['funds']['C']
+            for f in st['funds'].values():
+                f.pop('started')                                         # as saved before 2026-10-03
+            st['cursor'] = T
+            Path(d, 'state.json').write_text(json.dumps(st), encoding='utf-8')
+            logs = []
+            with mock.patch.object(fund, '_activity',
+                                   lambda w, s, e: ([fill(T + 900, 'BUY', 250, .4)] if w == W1 else [], False)), \
+                    mock.patch.object(fund, '_clob_market', m), \
+                    mock.patch.object(fund, '_price_later', no_late), \
+                    mock.patch.object(fund, '_closed_at', {}.get):
+                fund.build_fund(self.CARDS, now_ts=T + 1600, out_dir=d, log=logs.append)
+            after = json.loads(Path(d, 'state.json').read_text(encoding='utf-8'))
+        self.assertTrue(any('opened fund C' in line for line in logs), logs)
+        self.assertEqual(len(after['funds']['A']['open']), 1)              # A copied the fill at T+900
+        self.assertEqual((after['funds']['C']['open'], after['funds']['C']['started']), ([], T + 1600))
 
     def test_a_run_soon_after_opening_has_no_window_yet(self):
         with tempfile.TemporaryDirectory() as d, \

@@ -400,7 +400,8 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 
 /* ── paper fund ─────────────────────────────────────────────────────── */
 .fd-status{margin:0 0 12px}
-.fd-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.fd-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-bottom:12px}
+.fd-since{font-size:12px;color:var(--faint);margin-top:3px}
 .fd-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
   padding:14px 16px;cursor:pointer;min-width:0;transition:border-color .15s}
 .fd-card:hover{border-color:#525252}

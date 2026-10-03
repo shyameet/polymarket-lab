@@ -97,7 +97,13 @@ fill's price, in the same second. It then follows the whale it copied: a sale of
 part of what the whale bought sells the same share at the same price, otherwise it
 holds and is paid $1 / $0 when the market settles. One position per outcome; a
 signal that finds no cash is counted as missed. Fund A copies every signal, fund B
-only markets scheduled to end within 48 hours. Taker fees on every buy and sell.
+only markets scheduled to end within 48 hours, and fund C (added 2026-10-03) every
+signal except crypto and esports markets (`feed.categorize` topics crypto, csgo,
+valorant, esports). Taker fees on every buy and sell. A fund added later opens
+empty at the first run that knows it and copies only signals after that moment; it
+shares nothing with the others but the signal, and a test checks that A and B come
+out identical with or without it. C's topics were chosen after one day of A's
+results, so only C's own record from its opening tests the idea.
 
 Each run replays the whales' fills since the last run in time order, using the
 whale list saved by the previous run (no look-ahead), with settlements as events in

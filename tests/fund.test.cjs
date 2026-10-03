@@ -64,6 +64,29 @@ test('the preview says which funds already hold an outcome, and which follow a s
   assert.deepEqual(sells.map(s=>[s.token,s.funds,s.price]),[['T9',['A','B'],.7]]);
 });
 
+test('each fund\'s preview call follows its own rule',async()=>{
+  const {fundCall,ruleOf}=await ready;
+  const rules={funds:{A:{name:'Every bet',max_hours:null,exclude:[]},B:{name:'Ends within 2 days',max_hours:48,exclude:[]},
+    C:{name:'No crypto or esports',max_hours:null,exclude:['crypto','csgo','valorant','esports']}}};
+  const s={ts:T,held:[]}, soon={end:T+3600}, later={end:T+72*3600}, rich={cash:500}, open={cash:500,started:T-60};
+  assert.deepEqual(fundCall('C',ruleOf(rules,'C'),open,s,soon,'crypto',{crypto:'Crypto'}),['C: skips Crypto','tag']);
+  assert.deepEqual(fundCall('C',ruleOf(rules,'C'),open,s,soon,'sports'),['C buys $10','tag pos']);
+  assert.deepEqual(fundCall('A',ruleOf(rules,'A'),rich,s,later,'crypto'),['A buys $10','tag pos']);
+  assert.deepEqual(fundCall('B',ruleOf(rules,'B'),rich,s,later,'sports'),['B: ends later, skips','tag']);
+  assert.deepEqual(fundCall('B',ruleOf(rules,'B'),rich,s,undefined,'sports'),['B: end date unknown','tag']);
+  assert.deepEqual(fundCall('A',ruleOf(rules,'A'),{cash:4},s,soon,'sports'),['A: no cash, misses','tag neg']);
+  assert.deepEqual(fundCall('C',ruleOf(rules,'C'),{cash:500,started:T+5},s,soon,'sports'),['C: opened after this','tag']);
+  assert.deepEqual(fundCall('A',ruleOf(rules,'A'),rich,{ts:T,held:['A']},soon,'sports'),['A: already holds it','tag']);
+});
+
+test('a fund.json from before fund C still reads: names only, B the one with a rule',async()=>{
+  const {ruleOf}=await ready;
+  const old={funds:{A:'Every bet',B:'Ends within 2 days'}};
+  assert.deepEqual(ruleOf(old,'B'),{max_hours:48,exclude:[]});
+  assert.deepEqual(ruleOf(old,'A'),{max_hours:null,exclude:[]});
+  assert.deepEqual(ruleOf(undefined,'C'),{max_hours:null,exclude:[]});
+});
+
 test('relay URLs carry the params once and a cache-busting nonce',async()=>{
   const {relayURLFor}=await ready;
   const u=new URL(relayURLFor('https://relay.example/','data','/activity',{user:W1,start:5},42));

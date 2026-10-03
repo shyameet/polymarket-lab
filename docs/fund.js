@@ -109,6 +109,27 @@ export function weeks(days, start) {
   return [...out.values()].reverse();
 }
 
+/** One fund's rule from fund.json: {max_hours, exclude}. A fund.json written before
+ *  2026-10-03 carried only names; B was then the one fund with a rule. */
+export function ruleOf(rules, code) {
+  const r = rules?.funds?.[code];
+  if (r && typeof r === 'object') return { max_hours: r.max_hours ?? null, exclude: r.exclude || [] };
+  return { max_hours: code === 'B' ? 48 : null, exclude: [] };
+}
+
+/** What one fund will do with a previewed signal, by its rules, as [label, tag class]. */
+export function fundCall(code, rule, fund, s, market, cat, catLabel = {}) {
+  if (fund.started && s.ts <= fund.started) return [`${code}: opened after this`, 'tag'];
+  if (s.held.includes(code)) return [`${code}: already holds it`, 'tag'];
+  if (cat && rule.exclude.includes(cat)) return [`${code}: skips ${catLabel[cat] || cat}`, 'tag'];
+  if (rule.max_hours != null) {
+    if (!market) return [`${code}: end date unknown`, 'tag'];
+    if (market.end == null || market.end - s.ts > rule.max_hours * 3600) return [`${code}: ends later, skips`, 'tag'];
+  }
+  if (fund.cash < STAKE + 0.5) return [`${code}: no cash, misses`, 'tag neg'];
+  return [`${code} buys $${STAKE}`, 'tag pos'];
+}
+
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const niceDate = (d) => {
@@ -128,7 +149,7 @@ const tone = (v) => (v == null || Math.abs(v) < 0.005 ? 'mut' : v > 0 ? 'pos' : 
 
 export function initFund(ctx) {
   const { state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn, openDrawer, CAT_LABEL,
-    relayURL } = ctx;
+    relayURL, categorize } = ctx;
   let saved = 'A';
   try { saved = localStorage.getItem('whaleLab.fund') || 'A'; } catch { /* private window: default */ }
   const R = { doc: null, missing: false, sel: saved, closedFilter: '', showOpen: 20, showClosed: 30,
@@ -215,13 +236,9 @@ export function initFund(ctx) {
 
   function fundCalls(s, L) {
     const m = L.markets.get(s.condition);
-    return Object.entries(R.doc.funds).map(([code, f]) => {
-      if (s.held.includes(code)) return [`${code}: already holds it`, 'tag'];
-      if (code === 'B' && !m) return ['B: end date unknown', 'tag'];
-      if (code === 'B' && (m.end == null || m.end - s.ts > 48 * 3600)) return ['B: ends later, skips', 'tag'];
-      if (f.cash < STAKE + 0.5) return [`${code}: no cash, misses`, 'tag neg'];
-      return [`${code} buys $${STAKE}`, 'tag pos'];
-    });
+    const cat = categorize ? categorize(s.title, s.slug) : null;
+    return Object.entries(R.doc.funds).map(([code, f]) =>
+      fundCall(code, ruleOf(R.doc.rules, code), f, s, m, cat, CAT_LABEL));
   }
 
   function liveRow(r, L) {
@@ -331,6 +348,10 @@ export function initFund(ctx) {
     const name = el('div', 'fd-name');
     name.append(el('span', 'fd-code', code), el('span', null, f.name));
     box.append(name);
+    // a fund added later says when its own record starts
+    if (f.started && R.doc?.started && f.started - R.doc.started > 600) {
+      box.append(el('div', 'fd-since', `Opened ${niceDate(istDay(f.started))}, ${istClock(f.started)} IST`));
+    }
     box.append(el('div', 'fd-eq', usd(f.equity)));
     box.append(el('div', `fd-pnl ${tone(f.pnl)}`, `${signed(f.pnl)} (${f.pnl >= 0 ? '+' : ''}${(f.pnl / f.start * 100).toFixed(1)}%) since start`));
     const mini = el('div', 'fd-mini');
@@ -355,9 +376,18 @@ export function initFund(ctx) {
     return n;
   }
 
+  // The fund being read is the brand orange; the others are grey, told apart by
+  // their line pattern (solid, dotted, dashed), never by a second colour.
+  const OTHER_DASH = ['', '2 4', '7 4'];
+  function lineStyle(series, code) {
+    if (code === R.sel) return { color: COLOR_SEL, dash: '' };
+    const i = series.filter((s) => s.code !== R.sel).findIndex((s) => s.code === code);
+    return { color: COLOR_OTHER, dash: OTHER_DASH[i] || '' };
+  }
+
   function chart(F) {
     const box = el('div', 'fd-chart');
-    box.append(el('h3', null, 'Equity, both funds'));
+    box.append(el('h3', null, 'Equity of the funds'));
     const series = Object.entries(F.funds).map(([code, f]) => ({ code, f, pts: f.points || [] }));
     const all = series.flatMap((s) => s.pts);
     if (all.length < 3 || series.every((s) => s.pts.length < 2)) {
@@ -373,15 +403,18 @@ export function initFund(ctx) {
     const X = (t) => (t1 > t0 ? ((t - t0) / (t1 - t0)) * W : W);
     const Y = (v) => H - ((v - lo) / (hi - lo)) * H;
     const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img',
-      'aria-label': `Equity of both funds since ${niceDate(istDay(t0))}` });
+      'aria-label': `Equity of the funds since ${niceDate(istDay(t0))}` });
     svg.append(svgEl('line', { x1: 0, x2: W, y1: Y(start), y2: Y(start), stroke: '#5a5852',
-      'stroke-dasharray': '4 4', 'vector-effect': 'non-scaling-stroke' }));
+      'stroke-dasharray': '4 4', 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' }));
     // the fund being read is drawn last, on top, in the brand colour
     for (const s of [...series].sort((a, b) => (a.code === R.sel) - (b.code === R.sel))) {
       if (s.pts.length < 2) continue;
       const d = s.pts.map(([t, v], i) => `${i ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join('');
-      svg.append(svgEl('path', { d, fill: 'none', stroke: s.code === R.sel ? COLOR_SEL : COLOR_OTHER,
-        'stroke-width': s.code === R.sel ? 2.5 : 1.75, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' }));
+      const look = lineStyle(series, s.code);
+      const attrs = { d, fill: 'none', stroke: look.color, 'stroke-width': s.code === R.sel ? 2.5 : 1.75,
+        'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' };
+      if (look.dash) attrs['stroke-dasharray'] = look.dash;
+      svg.append(svgEl('path', attrs));
     }
     box.append(svg);
     const axis = el('div', 'fd-axis');
@@ -391,7 +424,11 @@ export function initFund(ctx) {
     for (const s of series) {
       const item = el('span');
       const sw = el('span', 'fd-sw');
-      sw.style.background = s.code === R.sel ? COLOR_SEL : COLOR_OTHER;
+      const look = lineStyle(series, s.code);
+      const [on, off] = look.dash ? look.dash.split(' ').map(Number) : [0, 0];
+      sw.style.background = look.dash
+        ? `repeating-linear-gradient(90deg, ${look.color} 0 ${on}px, transparent ${on}px ${on + off}px)`
+        : look.color;
       item.append(sw, `${s.code} · ${s.f.name}: ${usd(s.f.equity)}`);
       legend.append(item);
     }
@@ -596,8 +633,14 @@ export function initFund(ctx) {
   }
 
   function skips(f, code) {
+    const rule = ruleOf(R.doc.rules, code);
     const parts = [`${f.copied} copied`, `${f.skipped_held} skipped because the fund already held that outcome`];
-    if (code === 'B') parts.push(`${f.skipped_filter} skipped because the market ends later than 2 days out`);
+    if (rule.max_hours != null) {
+      parts.push(`${f.skipped_filter} skipped because the market ends later than ${rule.max_hours / 24} days out`);
+    }
+    if (rule.exclude.length) {
+      parts.push(`${f.skipped_filter} skipped as ${rule.exclude.map((c) => CAT_LABEL[c] || c).join(', ')} markets`);
+    }
     parts.push(`${f.missed_cash} missed for lack of cash`, `${usd(f.fees)} paid in fees`);
     return el('p', 'tiny', `${parts.join(' · ')}.`);
   }
