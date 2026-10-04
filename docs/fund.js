@@ -109,6 +109,13 @@ export function weeks(days, start) {
   return [...out.values()].reverse();
 }
 
+/** The paper funds plus Fund D (real prices, rebuilt daily from the copy-price recorder) when its
+ *  file is there. D joins the cards, the chart and the details, never the live preview: its
+ *  copies come from the recorder's own feed, not from this page's check. */
+export function withD(funds, d) {
+  return d?.fund ? { ...funds, D: d.fund } : { ...funds };
+}
+
 /** One fund's rule from fund.json: {max_hours, exclude}. A fund.json written before
  *  2026-10-03 carried only names; B was then the one fund with a rule. */
 export function ruleOf(rules, code) {
@@ -141,6 +148,9 @@ const shortDate = (d) => {
   return `${t.getUTCDate()} ${MONTH[t.getUTCMonth()]}`;
 };
 const cents = (p) => (p == null ? '—' : `${Math.round(p * 100)}¢`);
+const cents1 = (p) => (p == null ? '—' : `${(p * 100).toFixed(1)}¢`);
+// Fund D's rows carry the whale's own price beside the one the order book gave
+const paid = (r) => (r.whale_price != null ? `${cents1(r.price)} (the whale ${cents1(r.whale_price)})` : cents(r.price));
 const dollars = (v) => Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const usd = (v) => (v == null ? '—' : `${v < 0 ? '-' : ''}$${dollars(v)}`);
 const signed = (v) => (v == null ? '—' : `${v > 0.004 ? '+' : v < -0.004 ? '-' : ''}$${dollars(v)}`);
@@ -152,21 +162,25 @@ export function initFund(ctx) {
     relayURL, categorize } = ctx;
   let saved = 'A';
   try { saved = localStorage.getItem('whaleLab.fund') || 'A'; } catch { /* private window: default */ }
-  const R = { doc: null, missing: false, sel: saved, closedFilter: '', showOpen: 20, showClosed: 30,
+  const R = { doc: null, d: null, missing: false, sel: saved, closedFilter: '', showOpen: 20, showClosed: 30,
     allDays: false, polledAt: 0, live: null, liveBusy: false, liveAll: false };
   const root = document.querySelector('#fund-root');
   const now = () => Math.floor(Date.now() / 1000);
   const when = (ts) => (istDay(ts) === istDay(now()) ? istClock(ts) : `${shortDate(istDay(ts))} ${istClock(ts)}`);
+  const all = () => (R.doc ? withD(R.doc.funds, R.d) : {});
 
   async function load() {
     try {
-      const doc = await snapshotJSON('data/fund/fund.json');
+      // Fund D's file is optional: without it the page is exactly the three funds
+      const [doc, d] = await Promise.all([snapshotJSON('data/fund/fund.json'),
+        snapshotJSON('data/fund_d.json').catch(() => null)]);
+      if (d && d.fund) R.d = d;
       if (doc && doc.funds) {
         R.doc = doc;
         R.missing = false;
-        if (!doc.funds[R.sel]) R.sel = Object.keys(doc.funds)[0];
-        render();
       }
+      if (R.doc && !all()[R.sel]) R.sel = Object.keys(R.doc.funds)[0];
+      if ((doc && doc.funds) || (d && d.fund)) render();
     } catch {
       // not written yet (the pipeline opens the funds on its first run) or mid-deploy
       R.missing = true;
@@ -367,6 +381,10 @@ export function initFund(ctx) {
     box.append(el('p', 'fd-facts', f.closed_n
       ? `Closed ${f.closed_n}: won ${f.won} (${pct(f.win_rate)}; the prices paid implied ${pct(f.baseline)}) · booked ${signed(f.realized)}`
       : 'Nothing closed yet.'));
+    if (f.twin) {
+      box.append(el('p', 'fd-facts', `At the whale's own prices the same copies: ${signed(f.twin.pnl)}. `
+        + `Real prices cost ${Math.round(f.cost_cents)}¢ a copy.`));
+    }
     return box;
   }
 
@@ -559,7 +577,7 @@ export function initFund(ctx) {
     li.append(right);
     const says = el('div', 'says');
     const sold = p.sold_frac > 0.001 ? ` · sold ${Math.round(p.sold_frac * 100)}% with the whale` : '';
-    says.append(el('span', 'when', when(p.ts)), ` bought "${p.outcome || '?'}" at ${cents(p.price)} → now `,
+    says.append(el('span', 'when', when(p.ts)), ` bought "${p.outcome || '?'}" at ${paid(p)} → now `,
       el('b', null, cents(p.mark ?? p.price)), sold);
     li.append(says);
     const mk = marketLine(p);
@@ -582,10 +600,11 @@ export function initFund(ctx) {
     li.append(who);
     const right = el('div');
     right.append(el('div', `headline-num ${tone(c.pnl)}`, signed(c.pnl)));
-    right.append(el('div', 'headline-sub', c.late_pnl == null ? 'on $10' : `a minute late: ${signed(c.late_pnl)}`));
+    right.append(el('div', 'headline-sub', c.twin_pnl != null ? `at the whale's price ${signed(c.twin_pnl)}`
+      : c.late_pnl == null ? 'on $10' : `a minute late: ${signed(c.late_pnl)}`));
     li.append(right);
     const says = el('div', 'says');
-    says.append(el('span', 'when', when(c.ts)), ` bought "${c.outcome || '?'}" at ${cents(c.price)} → `,
+    says.append(el('span', 'when', when(c.ts)), ` bought "${c.outcome || '?'}" at ${paid(c)} → `,
       el('b', null, closedText(c)), ` · ${when(c.close_ts)}`);
     li.append(says, marketLine(c));
     return li;
@@ -645,6 +664,56 @@ export function initFund(ctx) {
     return el('p', 'tiny', `${parts.join(' · ')}.`);
   }
 
+  /* ── Fund D: the same copies at the prices the order book really offered ── */
+  function dNote(f) {
+    const d = R.d;
+    const box = el('div', 'rc-head fd-late');
+    box.append(el('h3', null, 'What real prices cost'));
+    const p = el('p', 'rc-copy');
+    p.append(`The same ${f.copied} copies with the same exits: at the whale's own prices `,
+      el('b', tone(f.twin.pnl), signed(f.twin.pnl)), ', at the prices the order book really offered ',
+      el('b', tone(f.pnl), signed(f.pnl)), `, so ${Math.round(f.cost_cents)}¢ a copy.`);
+    box.append(p);
+    box.append(el('p', 'tiny', 'Fund D copies the same signals as fund A, but prices every buy and sell from the live '
+      + 'order book at the moment the copy-price recorder saw the whale\'s trade (about 0.1–0.2 s after it, on the VPS): '
+      + '$10 walked through the real sell orders, a sale through the real buy orders. Nothing is estimated; a copy or '
+      + `sale the recorder could not price is left out of both columns. Rebuilt once a day from the recorders (last `
+      + `${ago(d.generated_at)} ago), copies from ${niceDate(istDay(d.first))} ${istClock(d.first)} IST. ${d.fee_note}`));
+    return box;
+  }
+
+  function rulesPanel() {
+    const d = R.d;
+    if (!d?.rules?.length) return null;
+    const box = el('div');
+    box.append(el('h3', null, 'Can a copy get the whale\'s exact price?'));
+    box.append(el('p', 'tiny', 'Four ways to buy, fixed on 4 Oct before the data they are judged on. The test is the '
+      + 'days from 5 Oct (India time). Under each result: the same copies at the whale\'s own price.'));
+    const cell = (x) => (x.copies ? [moneyCell(x.real), el('small', 'mut', `${x.copies} copies · whale's price ${signed(x.twin)}`)]
+      : '—');
+    box.append(table(['How the copy buys', 'Test: from 5 Oct', 'All so far'],
+      d.rules.map((r, i) => [`${i + 1}. ${r.label}`, cell(r.fresh), cell(r.so_far)])));
+    return box;
+  }
+
+  function dCatTable(f) {
+    if (!f.cats?.length) return null;
+    const box = el('div');
+    box.append(el('h3', null, 'Where the money came from'));
+    box.append(table(['Topic', 'Won', 'Booked'], f.cats.map((c) => [
+      CAT_LABEL[c.category] || 'Other', `${c.won} of ${c.closed}`, moneyCell(c.realized)])));
+    box.append(el('p', 'tiny', 'Closed bets only, by topic, at the prices really offered.'));
+    return box;
+  }
+
+  function dSkips(f) {
+    const parts = [`${f.copied} copied`, `${f.skipped_held} skipped because the fund already held that outcome`,
+      `${f.unpriced} not priced (no fresh order book within 2 s)`, `${f.late} seen too late to copy`,
+      `${f.missed_cash} missed for lack of cash`,
+      `${f.exits - f.exit_unpriced - f.exit_late} of ${f.exits} whale sells followed`, `${usd(f.fees)} paid in fees`];
+    return el('p', 'tiny', `${parts.join(' · ')}.`);
+  }
+
   function render() {
     if (!root || state.view !== 'fund') return;
     const y = window.scrollY;
@@ -657,24 +726,28 @@ export function initFund(ctx) {
       return;
     }
     root.append(statusLine(F));
+    const funds = all();
     const cards = el('div', 'fd-cards');
-    for (const [code, f] of Object.entries(F.funds)) cards.append(card(code, f));
+    for (const [code, f] of Object.entries(funds)) cards.append(card(code, f));
     root.append(cards);
     root.append(livePanel(F));
-    const f = F.funds[R.sel];
+    const f = funds[R.sel];
     const nothingYet = Object.values(F.funds).every((x) => !x.copied && !x.open_n && !x.closed_n);
     if (nothingYet) {
       root.append(el('p', 'empty', 'No copies in the books yet. Each update replays the whales\' trades since the '
         + 'last one and times every copy to the second the whale traded, so nothing is lost by waiting.'));
     }
-    root.append(chart(F));
+    root.append(chart({ ...F, funds }));
     const head = el('h3', 'fd-sel', `${R.sel} · ${f.name}`);
     root.append(head);
     if (f.missed_cash && f.cash < 11) {
       root.append(el('p', 'hint fd-full', `Fund ${R.sel} is fully invested: ${usd(f.cash)} cash, ${f.open_n} bets open. `
         + `New signals are missed (${f.missed_cash} so far) until bets close and pay back.`));
     }
-    for (const part of [dayTable(f), weekTable(f), catTable(f), lateNote(f), openList(f), closedList(f), skips(f, R.sel)]) {
+    const parts = R.sel === 'D'
+      ? [dNote(f), rulesPanel(), dayTable(f), weekTable(f), dCatTable(f), openList(f), closedList(f), dSkips(f)]
+      : [dayTable(f), weekTable(f), catTable(f), lateNote(f), openList(f), closedList(f), skips(f, R.sel)];
+    for (const part of parts) {
       if (part) root.append(part);
     }
     window.scrollTo({ top: y });

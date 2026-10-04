@@ -117,7 +117,7 @@
 
 <section id="view-fund" class="view" hidden>
   <details class="about">
-    <summary>Three $1,000 paper funds that copy the proven whales by themselves — how they trade</summary>
+    <summary>Four $1,000 paper funds that copy the proven whales by themselves — how they trade</summary>
     <div class="about-body">
       <p><b>The signal.</b> When a whale rated <b>Worth following</b> puts $100 or more into one outcome in one
         India-time day, the fund buys <b>$10</b> of the same outcome at the same price, in the same second. Every
@@ -140,6 +140,12 @@
       <p><b>What it cannot see.</b> Only the buys it watched: if a whale already held the outcome, a sale counts
         against the part the fund copied. A whale leaving by merging both sides instead of selling is not seen,
         and the copy holds to the end.</p>
+      <p><b>D: real prices.</b> A, B and C buy and sell at the whale's own price, the best case. Fund D takes the
+        same signals as A but prices every buy and sell from the live order book at the moment a recorder heard
+        the whale's trade (about 0.1–0.2 s after it): $10 walked through the real sell orders, sales through the
+        real buy orders. Its card also shows the same copies at the whale's own price, so the gap is the real cost
+        of copying. Nothing is estimated: a copy the recorder could not price is left out. D is rebuilt once a
+        day from the recorders, and starts on 4 Oct 2026.</p>
     </div>
   </details>
   <div id="fund-root"></div>
@@ -421,6 +427,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20261003a" type="module"></script>
+<script src="app.js?v=20261004a" type="module"></script>
 </body>
 </html>
