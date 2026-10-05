@@ -775,7 +775,7 @@ export function initFund(ctx) {
     const mk = d.match && Object.keys(d.match).sort().pop();
     const caught = mk ? ` On ${niceDate(mk)} the recorder caught ${d.match[mk].caught} of the paper funds' `
       + `${d.match[mk].funds} copyable signals${d.match[mk].partial ? ' (it ran for part of that day)' : ''}.` : '';
-    const own = f.rule?.min_price != null;
+    const own = f.rule?.min_price != null || !!f.rule?.entry || !!f.rule?.sections?.length;
     box.append(el('p', 'tiny', `Fund ${code} uses ${own ? `its own rule on fund ${f.mirror}'s signals`
       : `fund ${f.mirror || 'A'}'s rule`} (${ruleText(f)}) on the signals the `
       + 'copy-price recorder on our server caught, and prices every buy and sell from the live order book at the '
