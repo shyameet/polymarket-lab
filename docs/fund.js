@@ -705,7 +705,7 @@ export function initFund(ctx) {
   /* ── G: the one rule the data analytics kept, tested forward; every other candidate watched ── */
   const VERDICT = {
     'too early': 'too early to judge',
-    passes: 'PASSES: the bets it skips lose money at real prices',
+    passes: 'PASSES: the bets it skips lose money at real prices (the filter helps; that alone does not mean G makes money)',
     fails: 'FAILS: the bets it skips made money at real prices',
     'not decided': 'not decided yet: losing, but not clearly enough',
   };
@@ -732,7 +732,8 @@ export function initFund(ctx) {
       + `The rule and its verdict were fixed before G opened: after ${v.min_closed} skipped bets have closed and `
       + `${v.min_days} days have passed, it passes if they lost money clearly (t at or below ${v.t_pass}, counting a `
       + 'whale\'s same-day bets as one piece of evidence) and fails if they made money. Until then it keeps running '
-      + `(${v.days} days so far). The study's own numbers are not counted.`));
+      + `(${v.days} days so far). The study's own numbers are not counted. A pass only says the filter cuts a loss; `
+      + 'whether copying pays at all is G\'s own result against zero, and so far no real-price fund has paid.'));
     return box;
   }
 

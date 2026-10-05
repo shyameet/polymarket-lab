@@ -1841,7 +1841,7 @@ import('./recap.js?v=20260924a').then(({initRecap}) => {
     marketLink, copyMarketBtn, openDrawer, CAT_LABEL});
   if (state.view === 'recap') { state.recapUI.render(); state.recapUI.tick(); }
 }).catch(() => { $('#recap-root').textContent = 'The recap could not load. Reload to retry.'; });
-import('./fund.js?v=20261005b').then(({initFund}) => {
+import('./fund.js?v=20261005c').then(({initFund}) => {
   state.fundUI = initFund({state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn,
     openDrawer, CAT_LABEL, relayURL: relayUrl, categorize: categorizeClient});
   if (state.view === 'fund') { state.fundUI.render(); state.fundUI.tick(); }
