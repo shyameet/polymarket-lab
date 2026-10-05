@@ -109,8 +109,8 @@ export function weeks(days, start) {
   return [...out.values()].reverse();
 }
 
-/** The paper funds A, B and C plus the real-price funds D, E and F when their file is there: each
- *  copies its paper fund's signals (D←A, E←B, F←C) at the prices the order book really offered,
+/** The paper funds A, B and C plus the real-price funds D, E, F and G when their file is there: each
+ *  copies its paper fund's signals (D←A, E←B, F←C; G←A without longshots) at the prices the order book really offered,
  *  built from the copy-price recorder. A file written before E and F carries D alone as `fund`.
  *  They join the cards, the chart and the details, never the live preview: their copies come from
  *  the recorder's own feed, not from this page's check. */
@@ -671,6 +671,7 @@ export function initFund(ctx) {
   /* ── D, E and F: the same copies at the prices the order book really offered ── */
   function ruleText(f) {
     const r = f.rule || {};
+    if (r.min_price != null) return `every signal except where the whale paid under ${Math.round(r.min_price * 100)}¢`;
     if (r.max_hours != null) return `markets scheduled to end within ${r.max_hours / 24} days`;
     if (r.exclude?.length) return `every signal except ${r.exclude.map((c) => CAT_LABEL[c] || c).join(', ')} markets`;
     return 'every signal';
@@ -688,14 +689,71 @@ export function initFund(ctx) {
     const mk = d.match && Object.keys(d.match).sort().pop();
     const caught = mk ? ` On ${niceDate(mk)} the recorder caught ${d.match[mk].caught} of the paper funds' `
       + `${d.match[mk].funds} copyable signals${d.match[mk].partial ? ' (it ran for part of that day)' : ''}.` : '';
-    box.append(el('p', 'tiny', `Fund ${code} uses fund ${f.mirror || 'A'}'s rule (${ruleText(f)}) on the signals the `
+    const own = f.rule?.min_price != null;
+    box.append(el('p', 'tiny', `Fund ${code} uses ${own ? `its own rule on fund ${f.mirror}'s signals`
+      : `fund ${f.mirror || 'A'}'s rule`} (${ruleText(f)}) on the signals the `
       + 'copy-price recorder on our server caught, and prices every buy and sell from the live order book at the '
       + 'moment it heard the whale\'s trade (about 0.1–0.2 s after it): $10 walked through the real sell orders, a '
       + 'sale through the real buy orders. No fill price is estimated; a copy or sale the recorder could not price is '
       + 'left out of both columns. Bets still open are valued at Polymarket\'s quoted price now, as in A, B and C, '
       + `not at what selling into the buy orders would get.${caught} Rebuilt about every 15 minutes while its publisher `
       + `runs (last ${ago(d.generated_at)} ago, whale trades up to ${when(d.last)} IST), copies from `
-      + `${niceDate(istDay(d.first))} ${istClock(d.first)} IST. ${d.fee_note}`));
+      + `${niceDate(istDay(f.started || d.first))} ${istClock(f.started || d.first)} IST. ${d.fee_note}`));
+    return box;
+  }
+
+  /* ── G: the one rule the data analytics kept, tested forward; every other candidate watched ── */
+  const VERDICT = {
+    'too early': 'too early to judge',
+    passes: 'PASSES: the bets it skips lose money at real prices',
+    fails: 'FAILS: the bets it skips made money at real prices',
+    'not decided': 'not decided yet: losing, but not clearly enough',
+  };
+  function gPanel(f) {
+    const fw = R.d?.forward;
+    if (!fw?.verdict) return null;
+    const v = fw.verdict;
+    const sh = v.shadow;
+    const cut = Math.round(fw.min_price * 100);
+    const box = el('div', 'rc-head fd-late');
+    box.append(el('h3', null, 'Is skipping longshots worth it? The forward test'));
+    const p = el('p', 'rc-copy');
+    p.append(`Since ${niceDate(istDay(fw.from))} ${istClock(fw.from)} IST, G has made `, el('b', tone(f.pnl), signed(f.pnl)),
+      ' at real prices. Fund D, copying every signal over the same hours, made ',
+      el('b', tone(fw.d_same_days.real), signed(fw.d_same_days.real)), `. The bets G skips (the whale paid under ${cut}¢), `
+      + 'each copied at its real price with no cash limit: ', el('b', tone(sh.real), signed(sh.real)),
+      ` on ${sh.closed} closed${sh.open ? `, ${sh.open} still open` : ''}. Verdict: `, el('b', null, VERDICT[v.status] || v.status), '.');
+    box.append(p);
+    box.append(el('p', 'tiny', `Why this rule: our study of every copy from 21 Sep to 5 Oct searched 447 slices of the `
+      + 'bets (by topic, hour, weekday, price and bet size) and 225 whales, and two skeptics re-ran each finding. No topic '
+      + 'and no time of day paid once the real copy cost was counted; their rankings flipped from one week to the next. '
+      + `One rule held: copies where the whale paid under ${cut}¢ lost in both weeks, after costs, across 91 whales, `
+      + `because one 1¢ tick is a large share of a small price. It cuts a loss; it does not make a profit on its own. `
+      + `The rule and its verdict were fixed before G opened: after ${v.min_closed} skipped bets have closed and `
+      + `${v.min_days} days have passed, it passes if they lost money clearly (t at or below ${v.t_pass}, counting a `
+      + 'whale\'s same-day bets as one piece of evidence) and fails if they made money. Until then it keeps running '
+      + `(${v.days} days so far). The study's own numbers are not counted.`));
+    return box;
+  }
+
+  function watchPanel() {
+    const fw = R.d?.forward;
+    if (!fw?.watch?.length) return null;
+    const box = el('div');
+    box.append(el('h3', null, 'Best topics and times? Every idea, tested forward'));
+    box.append(el('p', 'tiny', `Each idea the study tested, now counted on new bets only: every signal since `
+      + `${niceDate(istDay(fw.from))} ${istClock(fw.from)} IST, copied at real prices with no cash limit, so no idea `
+      + 'crowds out another. In brackets: what the study found. t is how clearly a result differs from zero '
+      + '(roughly, beyond ±2 is unlikely to be luck), counting a whale\'s same-day bets as one piece of evidence.'));
+    const tcell = (t) => (t == null ? '—' : el('span', Math.abs(t) >= 2 ? tone(t) : 'mut', t.toFixed(1)));
+    box.append(table(['Idea', 'Closed (won)', 'Real prices', 'Whale\'s price', 't', 'Open'], fw.watch.map((w) => {
+      const [name, note] = w.label.split(' [');
+      return [[name, note ? el('small', 'mut', ` ${note.replace(/]$/, '')}`) : ''],
+        w.closed ? `${w.closed} (${w.won})` : '0', w.closed ? moneyCell(w.real) : '—', w.closed ? moneyCell(w.twin) : '—',
+        tcell(w.t), w.open ? `${w.open} · ${signed(w.open_pnl)}` : '0'];
+    })));
+    box.append(el('p', 'tiny', 'Closed bets only in the money columns; open bets are counted with their value at '
+      + 'Polymarket\'s quoted price now. One bet can sit in several rows (a topic, an hour and a price band).'));
     return box;
   }
 
@@ -724,13 +782,14 @@ export function initFund(ctx) {
     return box;
   }
 
-  function dSkips(f) {
+  function dSkips(f, code) {
     const parts = [`${f.copied} copied`, `${f.skipped_held} skipped because the fund already held that outcome`];
     if (f.skipped_filter) {
       const r = f.rule || {};
-      const why = r.max_hours != null ? `because the market ends later than ${r.max_hours / 24} days out`
-        : `as ${(r.exclude || []).map((c) => CAT_LABEL[c] || c).join(', ')} markets`;
-      parts.push(`${f.skipped_filter} skipped ${why} (fund ${f.mirror}'s rule)`);
+      const why = r.min_price != null ? `because the whale paid under ${Math.round(r.min_price * 100)}¢ (fund ${code}'s rule)`
+        : `${r.max_hours != null ? `because the market ends later than ${r.max_hours / 24} days out`
+          : `as ${(r.exclude || []).map((c) => CAT_LABEL[c] || c).join(', ')} markets`} (fund ${f.mirror}'s rule)`;
+      parts.push(`${f.skipped_filter} skipped ${why}`);
     }
     parts.push(`${f.unpriced} not priced (no fresh order book within 2 s)`, `${f.late} seen too late to copy`,
       `${f.missed_cash} missed for lack of cash`,
@@ -757,7 +816,8 @@ export function initFund(ctx) {
         + 'what a perfect copy would make.', Object.entries(funds).filter(([, x]) => !x.twin)],
       ['Real prices — what a copy really gets', 'D, E and F use A\'s, B\'s and C\'s rules on the signals our server\'s '
         + 'recorder caught, priced from the live order book the moment it heard the whale\'s trade (about 0.1–0.2 s '
-        + 'after it).',
+        + `after it).${funds.G ? ' G is A\'s signals without the longshots (the whale paid under 20¢): the one rule '
+          + 'our data analysis kept, tested forward from its own start.' : ''}`,
       Object.entries(funds).filter(([, x]) => x.twin)]];
     const both = groups.every(([, , list]) => list.length);
     for (const [title, note, list] of groups) {
@@ -782,8 +842,9 @@ export function initFund(ctx) {
         + `New signals are missed (${f.missed_cash} so far) until bets close and pay back.`));
     }
     const parts = f.twin
-      ? [dNote(f, R.sel), R.sel === 'D' ? rulesPanel() : null, dayTable(f), weekTable(f), dCatTable(f), openList(f),
-        closedList(f), dSkips(f)]
+      ? [dNote(f, R.sel), R.sel === 'D' ? rulesPanel() : null, R.sel === 'G' ? gPanel(f) : null,
+        R.sel === 'G' ? watchPanel() : null, dayTable(f), weekTable(f), dCatTable(f), openList(f), closedList(f),
+        dSkips(f, R.sel)]
       : [dayTable(f), weekTable(f), catTable(f), lateNote(f), openList(f), closedList(f), skips(f, R.sel)];
     for (const part of parts) {
       if (part) root.append(part);
