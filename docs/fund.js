@@ -398,6 +398,83 @@ export function initFund(ctx) {
     return n;
   }
 
+  /* ── H: the fair test (owner, 5 Oct): two books opened together with $1,000 each that take exactly the same
+   *  copies; one pays the whale's own price, the other the order book's. One card, both books side by side. ── */
+  function pairCard(code, f) {
+    const box = el('div', `fd-card fd-pair${code === R.sel ? ' sel' : ''}`);
+    box.tabIndex = 0;
+    box.setAttribute('role', 'button');
+    box.setAttribute('aria-pressed', String(code === R.sel));
+    const pick = () => {
+      R.sel = code; R.showOpen = 20; R.showClosed = 30; R.closedFilter = '';
+      try { localStorage.setItem('whaleLab.fund', code); } catch { /* not kept; fine */ }
+      render();
+    };
+    box.addEventListener('click', pick);
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    const name = el('div', 'fd-name');
+    name.append(el('span', 'fd-code', code), el('span', null, f.name));
+    box.append(name);
+    box.append(el('div', 'fd-since', `Opened ${niceDate(istDay(f.started))}, ${istClock(f.started)} IST · `
+      + `$${f.start.toLocaleString('en-US')} in each book · ${ruleText(f)} our server's recorder catches`));
+    const two = el('div', 'fd-two');
+    for (const [label, eq, pnl, cls] of [['At the whale\'s price', f.twin.equity, f.twin.pnl, 'whale'],
+      ['At the real price', f.equity, f.pnl, 'real']]) {
+      const side = el('div', `fd-side ${cls}`);
+      side.append(el('span', 'fd-side-k', label), el('div', 'fd-eq', usd(eq)),
+        el('div', `fd-pnl ${tone(pnl)}`, `${signed(pnl)} since the opening`));
+      two.append(side);
+    }
+    box.append(two);
+    const ch = pairChart(f);
+    if (ch) box.append(ch);
+    box.append(el('p', 'fd-facts', f.copied
+      ? `The same ${f.copied} ${f.copied === 1 ? 'copy' : 'copies'} in both books, with the same exits and settlements, `
+        + `so the gap is the price alone: ${Math.round(f.cost_cents)}¢ a copy · ${f.open_n} open · ${f.closed_n} closed`
+      : 'No copies yet. Both books take the first signal after the opening together.'));
+    return box;
+  }
+
+  function pairChart(f) {
+    const a = f.twin?.points || [], b = f.points || [];
+    if (a.length < 2 && b.length < 2) return null;
+    const all = [...a, ...b];
+    const t0 = Math.min(...all.map((p) => p[0])), t1 = Math.max(...all.map((p) => p[0]));
+    let lo = Math.min(f.start, ...all.map((p) => p[1])), hi = Math.max(f.start, ...all.map((p) => p[1]));
+    const pad = Math.max((hi - lo) * 0.12, 2);
+    lo -= pad; hi += pad;
+    const W = 600, H = 110;
+    const X = (t) => (t1 > t0 ? ((t - t0) / (t1 - t0)) * W : W);
+    const Y = (v) => H - ((v - lo) / (hi - lo)) * H;
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img',
+      'aria-label': 'Both books since the opening: the whale\'s price and the real price' });
+    svg.append(svgEl('line', { x1: 0, x2: W, y1: Y(f.start), y2: Y(f.start), stroke: '#5a5852',
+      'stroke-dasharray': '4 4', 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' }));
+    const line = (pts, color, width, dash) => {
+      if (pts.length < 2) return;
+      const attrs = { d: pts.map(([t, v], i) => `${i ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join(''),
+        fill: 'none', stroke: color, 'stroke-width': width, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' };
+      if (dash) attrs['stroke-dasharray'] = dash;
+      svg.append(svgEl('path', attrs));
+    };
+    line(a, COLOR_OTHER, 2, '6 4');          // the whale's price
+    line(b, COLOR_SEL, 2.5, '');             // the real price
+    const wrap = el('div', 'fd-pairwrap');
+    wrap.append(svg);
+    const legend = el('div', 'fd-legend');
+    for (const [text, bg] of [['at the whale\'s price', `repeating-linear-gradient(90deg, ${COLOR_OTHER} 0 6px, transparent 6px 10px)`],
+      ['at the real price', COLOR_SEL]]) {
+      const item = el('span');
+      const sw = el('span', 'fd-sw');
+      sw.style.background = bg;
+      item.append(sw, text);
+      legend.append(item);
+    }
+    legend.append(el('span', null, `${shortDate(istDay(t0))} ${istClock(t0)} to ${when(t1)} IST`));
+    wrap.append(legend);
+    return wrap;
+  }
+
   // The fund being read is the brand orange; the others are grey, told apart by
   // their line pattern (solid, dotted, dashed), never by a second colour.
   const OTHER_DASH = ['', '2 4', '7 4', '1 3', '10 3 2 3'];
@@ -811,7 +888,17 @@ export function initFund(ctx) {
     }
     root.append(statusLine(F));
     const funds = all();
-    // two kinds of fund, each in its own row: the whale's price (best case) and the real prices
+    // the fair test first (H: one card holding both books), then the two kinds of fund, each in its own row
+    const pairs = Object.entries(funds).filter(([, x]) => x.pair && x.twin);
+    if (pairs.length) {
+      root.append(el('h3', 'fd-group', 'The fair test — same trades, two prices'),
+        el('p', 'tiny fd-group-note', 'Two books opened at the same moment with the same cash, taking exactly the same '
+          + 'copies of every signal: one pays the whale\'s own price, the other the price the order book really offered. '
+          + 'The rows below are separate funds with their own cash and start times, so they hold different trades.'));
+      const cards = el('div', 'fd-cards');
+      for (const [code, f] of pairs) cards.append(pairCard(code, f));
+      root.append(cards);
+    }
     const groups = [
       ['Whale\'s price — the best case', 'A, B and C buy and sell at the whale\'s own price, in the same second: '
         + 'what a perfect copy would make.', Object.entries(funds).filter(([, x]) => !x.twin)],
@@ -819,7 +906,7 @@ export function initFund(ctx) {
         + 'recorder caught, priced from the live order book the moment it heard the whale\'s trade (about 0.1–0.2 s '
         + `after it).${funds.G ? ' G is A\'s signals without the longshots (the whale paid under 20¢): the one rule '
           + 'our data analysis kept, tested forward from its own start.' : ''}`,
-      Object.entries(funds).filter(([, x]) => x.twin)]];
+      Object.entries(funds).filter(([, x]) => x.twin && !x.pair)]];
     const both = groups.every(([, , list]) => list.length);
     for (const [title, note, list] of groups) {
       if (!list.length) continue;

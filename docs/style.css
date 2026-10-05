@@ -429,6 +429,14 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 .fd-sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
 .fd-sw.dash{background:repeating-linear-gradient(90deg,#5a5852 0 4px,transparent 4px 7px)}
 .fd-sel{font-size:17px;margin:18px 0 4px}
+.fd-pair{grid-column:1/-1}
+.fd-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.fd-side{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;min-width:0}
+.fd-side.real{border-color:var(--orange-line);background:var(--orange-wash)}
+.fd-side-k{display:block;font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
+.fd-side .fd-eq{margin-top:2px}
+.fd-pairwrap{margin-top:12px}
+.fd-pairwrap svg{display:block;width:100%;height:110px;overflow:visible}
 .fd-group{font-size:15px;margin:16px 0 2px}
 .fd-group-note{margin:0 0 8px}
 .fd-full{border:1px solid var(--gold-line);background:var(--gold-wash);color:var(--fg);
@@ -503,6 +511,8 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
   .rc-bl{font-size:12px}
   .fd-cards{grid-template-columns:1fr}
   .fd-eq{font-size:28px}
+  .fd-side .fd-eq{font-size:22px}
+  .fd-side{padding:8px 10px}
   .fd-chart{padding:12px 12px}
   .fd-table{font-size:12.5px}
   .fd-table th{font-size:10.5px;letter-spacing:.02em}
