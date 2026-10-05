@@ -7,7 +7,7 @@
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
 <!-- Kept out of search results by the owner's choice (2026-10-03); still open to anyone with the link. -->
 <meta name="robots" content="noindex, nofollow">
-<link rel="stylesheet" href="style.css?v=20261005h">
+<link rel="stylesheet" href="style.css?v=20261005i">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
 <link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
 <link rel="apple-touch-icon" href="brand/icon-180.png?v=20260923c">
@@ -146,8 +146,10 @@
         many. Every buy and sell is priced from the live order book at the moment the recorder heard the whale's
         trade (about 0.1–0.2 s after it): $10 walked through the real sell orders, sales through the real buy
         orders. Each card also shows the same copies at the whale's own price, so the gap is the real cost of
-        copying. No fill price is estimated: a copy the recorder could not price is left out. Bets still open are
-        valued at Polymarket's quoted price now, as in A, B and C, and fees use the same fee model. They are
+        copying. No fill price is estimated: a copy the recorder could not price is left out. Fees are each
+        market's own Polymarket fee (most sports have none; 3-7% x price x (1 - price) elsewhere), checked against the
+        fees actually charged on the copied whale trades in Polygon's public record. Bets still open are valued at
+        what they would sell for right now, to the buy orders really waiting, after the fee. They are
         rebuilt about every 15 minutes while their publisher runs (each page says when it last ran), and they
         start on 4 Oct 2026 at 22:35 India time, when the server's recorder began.</p>
       <p><b>G: the forward test.</b> G copies A's signals at real prices, like D, but skips any bet where the
@@ -436,6 +438,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20261005h" type="module"></script>
+<script src="app.js?v=20261005i" type="module"></script>
 </body>
 </html>

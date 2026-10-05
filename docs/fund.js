@@ -762,6 +762,10 @@ export function initFund(ctx) {
     p.append(`The same ${f.copied} copies with the same exits: at the whale's own prices `,
       el('b', tone(f.twin.pnl), signed(f.twin.pnl)), ', at the prices the order book really offered ',
       el('b', tone(f.pnl), signed(f.pnl)), `, so ${Math.round(f.cost_cents)}¢ a copy.`);
+    if (f.open_n && f.in_bets_quoted != null) {
+      p.append(` Its ${f.open_n} open ${f.open_n === 1 ? 'bet' : 'bets'} would sell for ${usd(f.in_bets)} right now `
+        + `(${usd(f.in_bets_quoted)} at Polymarket's quoted price).`);
+    }
     box.append(p);
     const mk = d.match && Object.keys(d.match).sort().pop();
     const caught = mk ? ` On ${niceDate(mk)} the recorder caught ${d.match[mk].caught} of the paper funds' `
@@ -772,8 +776,10 @@ export function initFund(ctx) {
       + 'copy-price recorder on our server caught, and prices every buy and sell from the live order book at the '
       + 'moment it heard the whale\'s trade (about 0.1–0.2 s after it): $10 walked through the real sell orders, a '
       + 'sale through the real buy orders. No fill price is estimated; a copy or sale the recorder could not price is '
-      + 'left out of both columns. Bets still open are valued at Polymarket\'s quoted price now, as in A, B and C, '
-      + `not at what selling into the buy orders would get.${caught} Rebuilt about every 15 minutes while its publisher `
+      + 'left out of both columns. '
+      + (d.valuation_note || 'Bets still open are valued at Polymarket\'s quoted price now, as in A, B and C, not at what '
+        + 'selling into the buy orders would get.')
+      + `${caught} Rebuilt about every 15 minutes while its publisher `
       + `runs (last ${ago(d.generated_at)} ago, whale trades up to ${when(d.last)} IST), copies from `
       + `${niceDate(istDay(f.started || d.first))} ${istClock(f.started || d.first)} IST. ${d.fee_note}`));
     return box;
@@ -830,8 +836,8 @@ export function initFund(ctx) {
         w.closed ? `${w.closed} (${w.won})` : '0', w.closed ? moneyCell(w.real) : '—', w.closed ? moneyCell(w.twin) : '—',
         tcell(w.t), w.open ? `${w.open} · ${signed(w.open_pnl)}` : '0'];
     })));
-    box.append(el('p', 'tiny', 'Closed bets only in the money columns; open bets are counted with their value at '
-      + 'Polymarket\'s quoted price now. One bet can sit in several rows (a topic, an hour and a price band).'));
+    box.append(el('p', 'tiny', 'Closed bets only in the money columns; open bets are counted at what they would sell '
+      + 'for right now. One bet can sit in several rows (a topic, an hour and a price band).'));
     return box;
   }
 
@@ -901,7 +907,9 @@ export function initFund(ctx) {
     }
     const groups = [
       ['Whale\'s price — the best case', 'A, B and C buy and sell at the whale\'s own price, in the same second: '
-        + 'what a perfect copy would make.', Object.entries(funds).filter(([, x]) => !x.twin)],
+        + 'what a perfect copy would make. Their fees are a flat 5% estimate and their open bets are valued at the '
+        + 'quoted price; D to H use each market\'s real fee and what open bets would sell for right now.',
+      Object.entries(funds).filter(([, x]) => !x.twin)],
       ['Real prices — what a copy really gets', 'D, E and F use A\'s, B\'s and C\'s rules on the signals our server\'s '
         + 'recorder caught, priced from the live order book the moment it heard the whale\'s trade (about 0.1–0.2 s '
         + `after it).${funds.G ? ' G is A\'s signals without the longshots (the whale paid under 20¢): the one rule '
