@@ -748,6 +748,11 @@ export function initFund(ctx) {
   /* ── D, E and F: the same copies at the prices the order book really offered ── */
   function ruleText(f) {
     const r = f.rule || {};
+    if (r.entry === 'liquid_exact') {
+      return `${r.sections?.length ? `${r.sections.join(' and ')} markets only, and ` : ''}only where the order book `
+        + 'is deep (at least $1,000 of sell orders within 2¢ of the best price, spread 1¢ or less) and the whale\'s '
+        + 'exact price is still on offer';
+    }
     if (r.min_price != null) return `every signal except where the whale paid under ${Math.round(r.min_price * 100)}¢`;
     if (r.max_hours != null) return `markets scheduled to end within ${r.max_hours / 24} days`;
     if (r.exclude?.length) return `every signal except ${r.exclude.map((c) => CAT_LABEL[c] || c).join(', ')} markets`;
@@ -870,10 +875,14 @@ export function initFund(ctx) {
     const parts = [`${f.copied} copied`, `${f.skipped_held} skipped because the fund already held that outcome`];
     if (f.skipped_filter) {
       const r = f.rule || {};
-      const why = r.min_price != null ? `because the whale paid under ${Math.round(r.min_price * 100)}¢ (fund ${code}'s rule)`
-        : `${r.max_hours != null ? `because the market ends later than ${r.max_hours / 24} days out`
-          : `as ${(r.exclude || []).map((c) => CAT_LABEL[c] || c).join(', ')} markets`} (fund ${f.mirror}'s rule)`;
+      const why = r.sections?.length ? `as not ${r.sections.join(' or ')} markets (fund ${code}'s rule)`
+        : r.min_price != null ? `because the whale paid under ${Math.round(r.min_price * 100)}¢ (fund ${code}'s rule)`
+          : `${r.max_hours != null ? `because the market ends later than ${r.max_hours / 24} days out`
+            : `as ${(r.exclude || []).map((c) => CAT_LABEL[c] || c).join(', ')} markets`} (fund ${f.mirror}'s rule)`;
       parts.push(`${f.skipped_filter} skipped ${why}`);
+    }
+    if (f.rule_skip && f.rule?.entry === 'liquid_exact') {
+      parts.push(`${f.rule_skip} skipped because the order book was thin or the whale's price was gone (fund ${code}'s rule)`);
     }
     parts.push(`${f.unpriced} not priced (no fresh order book within 2 s)`, `${f.late} seen too late to copy`,
       `${f.missed_cash} missed for lack of cash`,
@@ -918,7 +927,9 @@ export function initFund(ctx) {
       Object.entries(funds).filter(([, x]) => !x.twin)],
       ['Real prices — what a copy really gets', 'D, E and F use A\'s, B\'s and C\'s rules on the signals our server\'s '
         + 'recorder caught, priced from the live order book the moment it heard the whale\'s trade (about 0.1–0.2 s '
-        + `after it).${funds.G ? ' G is A\'s signals without the longshots (the whale paid under 20¢): the one rule '
+        + `after it).${funds.I ? ' I is the owner\'s pick: weather trades only, and only when the order book is deep '
+          + 'and the whale\'s exact price is still on offer — about one trade a day, so it fills slowly.' : ''}`
+        + `${funds.G ? ' G is A\'s signals without the longshots (the whale paid under 20¢): the one rule '
           + 'our data analysis kept, tested forward from its own start.' : ''}`,
       Object.entries(funds).filter(([, x]) => x.twin && !x.pair)]];
     const both = groups.every(([, , list]) => list.length);
