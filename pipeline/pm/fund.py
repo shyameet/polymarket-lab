@@ -24,7 +24,17 @@ THE RULES, FIXED ON DAY ONE (the owner's choices that day)
   the copy -- one bet, one size.
 * Cash: a copy needs $10 plus the fee. Without it the signal is counted as missed.
 * Fees: taker fee rate * shares * p * (1 - p) on every buy and sell, none on a
-  settlement payout (the same model as daily.py).
+  settlement payout. Until FEE_SWITCH_TS (5 Oct 2026 18:30 IST) the rate was a
+  flat 5% estimate (daily.py); from then each copy and sale pays its market's own
+  published taker rate (Gamma feeSchedule: none on most sports, 3-7% elsewhere),
+  which matched the fees actually charged on-chain in 653 of 660 markets checked.
+  Trades booked before the switch keep the fee they were booked with: replaying
+  them at the real fees would change the cash and so which later signals were
+  affordable, i.e. invent a different history.
+* Value of a bet still open: what it would sell for right now -- its shares
+  walked through the buy orders really waiting, less the fee (from the first run
+  of this code; before, Polymarket's quoted price). Shares nobody bids for count
+  as $0 until the market settles.
 * Fund A copies every signal. Fund B copies only markets scheduled to end within
   48 hours, so its cash comes back and gets used again. (A scheduled end that has
   already passed while the market is still open counts as ending soon.)
@@ -88,6 +98,8 @@ SIGNAL_USD = 100.0
 LAG_S = 600              # replay only fills at least 10 minutes old: /activity indexes late
 LATE_S = 60              # the "copied a minute late" shadow price
 KEEP_CLOSED = 300        # closed trades kept in full per fund; the totals are kept for good
+FEE_SWITCH_TS = 1791205200   # 2026-10-05 18:30 IST: copies and sales from here pay the market's own fee
+BOOK_KEEP_S = 7200       # an open bet whose order book cannot be read keeps its last sell-now value this long
 FUNDS = {"A": {"name": "Every bet", "max_hours": None, "exclude": ()},
          "B": {"name": "Ends within 2 days", "max_hours": 48, "exclude": ()},
          "C": {"name": "No crypto or esports", "max_hours": None,
@@ -101,8 +113,14 @@ DAY_KEYS = ("copied", "missed", "closed", "won", "realized", "base",
 CAT_KEYS = ("closed", "won", "realized", "late", "late_n", "late_same")
 
 
-def fee(shares: float, price: float) -> float:
-    return FEE_RATE * shares * price * (1.0 - price)
+def fee(shares: float, price: float, rate: float = FEE_RATE) -> float:
+    return rate * shares * price * (1.0 - price)
+
+
+def _rate(p: dict, ts: int) -> float:
+    """The fee rate a copy pays on a trade at `ts`: its market's own rate from the switch, else the 5% estimate."""
+    r = p.get("fee_rate")
+    return r if (r is not None and ts >= FEE_SWITCH_TS) else FEE_RATE
 
 
 def iso_ts(s: str | None) -> int | None:
@@ -163,7 +181,7 @@ def _proceeds(p: dict) -> float:
 
 def _sell(f: dict, p: dict, ts: int, frac: float, price: float, late: float | None) -> None:
     sh = p["shares"] * frac
-    fe = fee(sh, price)
+    fe = fee(sh, price, _rate(p, ts))
     p["sales"].append({"ts": ts, "frac": frac, "price": price, "fee": fe, "late": late})
     p["left"] -= frac
     f["cash"] += sh * price - fe
@@ -176,10 +194,10 @@ def late_pnl(p: dict, payout: float | None) -> float | None:
     if not le or not 0 < le < 1 or any(s["late"] is None for s in p["sales"]):
         return None
     sh = STAKE / le
-    got = sum(sh * s["frac"] * s["late"] - fee(sh * s["frac"], s["late"]) for s in p["sales"])
+    got = sum(sh * s["frac"] * s["late"] - fee(sh * s["frac"], s["late"], _rate(p, s["ts"])) for s in p["sales"])
     if payout is not None:
         got += sh * p["left"] * payout
-    return got - STAKE - fee(sh, le)
+    return got - STAKE - fee(sh, le, _rate(p, p["ts"]))
 
 
 def _close(f: dict, p: dict, ts: int, how: str, payout: float | None) -> None:
@@ -226,7 +244,7 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
          market: Callable[[str], dict | None],
          price_later: Callable[[str, int], float | None],
          closed_at: Callable[[str], int | None] | None = None,
-         until: int | None = None) -> int:
+         until: int | None = None, fee_rates: dict | None = None) -> int:
     """Replay whale fills, and the settlements inside the window, in time order
     through every fund. Mutates `state` and returns the number of signals seen.
 
@@ -236,6 +254,8 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
     closed_at(condition) -> when a settled market closed, or None. With `until`
     (the window's end) it lets a payout land at that moment, freeing the cash
     for later signals; without them, settle_and_mark pays out at the run's end.
+    fee_rates: {condition: the market's own taker rate}; copies from FEE_SWITCH_TS
+    pay it (one missing from it keeps the 5% estimate and is flagged fee_est).
     """
     funds = state["funds"]
     due: list[tuple] = []                          # (when, id, fund, payout)
@@ -320,7 +340,13 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
                     f["skipped_filter"] += 1
                     continue
             shares = STAKE / price
-            fe = fee(shares, price)
+            rate, est = FEE_RATE, False
+            if fee_rates is not None and ts >= FEE_SWITCH_TS:
+                if fee_rates.get(cond) is None:
+                    est = True
+                else:
+                    rate = fee_rates[cond]
+            fe = fee(shares, price, rate)
             d = _day(f, ts)
             if f["cash"] < STAKE + fe:
                 f["missed_cash"] += 1
@@ -335,6 +361,10 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
                  "whale": w, "whale_name": r.get("name") or "", "ts": ts, "price": price,
                  "shares": shares, "fee": fe, "whale_held": ep["shares"], "left": 1.0,
                  "sales": [], "late_entry": price_later(tok, ts + LATE_S), "end_ts": m.get("end_ts")}
+            if fee_rates is not None and ts >= FEE_SWITCH_TS:
+                p["fee_rate"] = None if est else rate
+                if est:
+                    p["fee_est"] = True
             f["open"].append(p)
             schedule(code, p)
     if until is not None:
@@ -343,9 +373,12 @@ def step(state: dict, fills: list[dict], signal_wallets: set[str],
 
 
 def settle_and_mark(state: dict, market: Callable[[str], dict | None], now: int,
-                    closed_at: Callable[[str], int | None] | None = None) -> int:
-    """Pay out settled markets the replay has passed, mark the rest at the current
-    price, record equity. Returns the number of positions settled here.
+                    closed_at: Callable[[str], int | None] | None = None,
+                    sell_value: Callable[[dict], float | None] | None = None) -> int:
+    """Pay out settled markets the replay has passed, mark the rest, record equity.
+    Returns the number of positions settled here. With `sell_value` (dollars the
+    copy's remaining shares would fetch right now, None when its order book could
+    not be read) an open bet is marked at that; without it, at the quoted price.
 
     step() already pays out every market whose close falls inside the window it
     replayed. What is left: a market whose close time is unknown pays out on the
@@ -361,7 +394,16 @@ def settle_and_mark(state: dict, market: Callable[[str], dict | None], now: int,
             if tok is None:
                 continue
             if not m.get("resolved"):
-                p["mark"] = tok["price"]
+                p["quoted"] = tok["price"]
+                if sell_value is None:
+                    p["mark"] = tok["price"]
+                    continue
+                rem = p["shares"] * p["left"]
+                v = sell_value(p)
+                if v is not None:
+                    p["mark"], p["mark_t"] = (v / rem if rem > 1e-12 else 0.0), now
+                elif not (p.get("mark_t") and now - p["mark_t"] <= BOOK_KEEP_S):
+                    p["mark"] = 0.0                # no buy orders could be read: counts $0 until it can
                 continue
             payout = 1.0 if tok["winner"] else 0.0
             p["mark"] = payout
@@ -398,7 +440,8 @@ def _rounded(row: dict) -> dict:
 
 def view(state: dict, now: int) -> dict:
     out = {"generated_at": now, "started": state["started"], "cursor": state["cursor"],
-           "last_run": state.get("last_run"), "rules": RULES, "funds": {}}
+           "last_run": state.get("last_run"), "rules": RULES, "funds": {},
+           "fee_basis": {"switch": FEE_SWITCH_TS, "valued_from": state.get("valued_from")}}
     for code in sorted(state["funds"]):
         f = state["funds"][code]
         pts = f["points"]
@@ -424,7 +467,7 @@ def view(state: dict, now: int) -> dict:
                 **{k: p.get(k) for k in ("id", "token", "condition", "title", "slug", "outcome", "category",
                                          "whale", "whale_name", "ts", "end_ts")},
                 "price": _r(p["price"], 4), "late_entry": _r(p.get("late_entry"), 4),
-                "mark": _r(p.get("mark"), 4), "sold_frac": _r(sold, 4),
+                "mark": _r(p.get("mark"), 4), "quoted": _r(p.get("quoted"), 4), "sold_frac": _r(sold, 4),
                 "exit": _r(sum(s["frac"] * s["price"] for s in p["sales"]) / sold, 4) if sold else None,
                 "value": _r(_value(p)), "pnl_now": _r(_value(p) + _proceeds(p) - STAKE - p["fee"]),
                 "settling": "resolved_seen" in p})
@@ -441,6 +484,8 @@ def view(state: dict, now: int) -> dict:
             "pnl": _r(pts[-1][1] - START_CASH), "cash": _r(f["cash"]),
             "realized": _r(tot["realized"]), "unrealized": _r(unreal),
             "open_n": len(f["open"]), "in_bets": _r(sum(_value(p) for p in f["open"])),
+            "in_bets_quoted": _r(sum(p["shares"] * p["left"] * (p["quoted"] if p.get("quoted") is not None
+                                                                 else p.get("mark", p["price"])) for p in f["open"])),
             "closed_n": tot["closed"], "won": tot["won"], "lost": tot["closed"] - tot["won"],
             "win_rate": _r(tot["won"] / tot["closed"], 4) if tot["closed"] else None,
             "baseline": _r(tot["base"] / tot["closed"], 4) if tot["closed"] else None,
@@ -550,24 +595,90 @@ def _closed_at(cid: str) -> int | None:
     return None
 
 
+def _fee_schedules(conds: list[str]) -> dict[str, float]:
+    """{condition: the market's own taker fee rate} from Gamma (feesEnabled + feeSchedule.rate; 0 when fees are
+    off). Open and closed markets are asked separately (a settled market is missing from closed=false)."""
+    out: dict[str, float] = {}
+    for closed in (False, True):
+        todo = [c for c in conds if c and c not in out]
+        for i in range(0, len(todo), 50):
+            _GAMMA_PACE()
+            try:
+                rows = api.markets_keyset(limit=100, closed=closed, max_pages=1, condition_ids=todo[i:i + 50])
+            except api.PolymarketError as e:
+                print(f"  ! fund fee rules: {e}", file=sys.stderr)
+                continue
+            for m in rows:
+                fs = m.get("feeSchedule") or {}
+                out[m.get("conditionId")] = float(fs.get("rate") or 0.0) if m.get("feesEnabled") else 0.0
+    return out
+
+
+def _books_now(tokens: list[str]) -> dict[str, list]:
+    """{token: [[price, size], ...] buy orders best first}, read now from the CLOB (POST /books, 200 a call).
+    A settled market has no book; a batch that fails leaves its tokens out."""
+    import urllib.request
+    out: dict[str, list] = {}
+    toks = list(dict.fromkeys(t for t in tokens if t))
+    for i in range(0, len(toks), 200):
+        body = json.dumps([{"token_id": t} for t in toks[i:i + 200]]).encode()
+        for attempt in range(3):
+            _CLOB_PACE()
+            try:
+                req = urllib.request.Request(f"{api.CLOB}/books", data=body, method="POST",
+                                             headers={"Content-Type": "application/json", "User-Agent": api.UA})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    rows = json.loads(r.read())
+                break
+            except Exception as e:  # noqa: BLE001 - network: try again, then leave these out
+                rows = None
+                if attempt == 2:
+                    print(f"  ! fund order books: {e}", file=sys.stderr)
+                time.sleep(2 * (attempt + 1))
+        for b in rows or []:
+            tok = str(b.get("asset_id") or "")
+            if tok:
+                out[tok] = sorted(([float(x["price"]), float(x["size"])] for x in b.get("bids") or []),
+                                  reverse=True)
+    return out
+
+
+def _sell_now(p: dict, books: dict[str, list]) -> float | None:
+    """Dollars the copy's remaining shares would fetch right now: walked through the buy orders waiting, each
+    level paying the market's fee. None when its book was not read; 0 for shares nobody is bidding for."""
+    bids = books.get(p["token"])
+    if bids is None:
+        return None
+    rate = p["fee_rate"] if p.get("fee_rate") is not None else FEE_RATE
+    left, got = p["shares"] * p["left"], 0.0
+    for price, size in bids:
+        x = min(size, left)
+        got += x * price - fee(x, price, rate)
+        left -= x
+        if left <= 1e-9:
+            break
+    return got
+
+
 # ─────────────────────────── one pipeline run ───────────────────────────────
 
 def _replay(state: dict, fills: list[dict], signal: set[str], until: int, now: int,
-            market: _Lookups, closed: _Lookups, later: _Lookups, workers: int) -> tuple[int, int]:
+            market: _Lookups, closed: _Lookups, later: _Lookups, workers: int,
+            fee_rates: dict | None = None, sell_value: Callable | None = None) -> tuple[int, int]:
     """step() + settle_and_mark(), after dry runs that learn which lookups the
     window needs and fetch them in parallel. The dry runs repeat because the
     answers change the path: a payout frees cash, the cash opens another copy."""
     for _ in range(4):
         wm, wc, wl = set(), set(), set()
         trial = json.loads(json.dumps(state))
-        step(trial, fills, signal, market.peek(wm), later.peek(wl), closed.peek(wc), until)
+        step(trial, fills, signal, market.peek(wm), later.peek(wl), closed.peek(wc), until, fee_rates)
         settle_and_mark(trial, market.peek(wm), now, closed.peek(wc))
         if not (wm or wc or wl):
             break
         for lookups, keys in ((market, wm), (closed, wc), (later, wl)):
             lookups.prefetch(keys, workers)
-    signals = step(state, fills, signal, market, later, closed, until)
-    return signals, settle_and_mark(state, market, now, closed)
+    signals = step(state, fills, signal, market, later, closed, until, fee_rates)
+    return signals, settle_and_mark(state, market, now, closed, sell_value)
 
 
 def build_fund(cards: list[dict], *, now_ts: int, out_dir: str, workers: int = 8,
@@ -617,12 +728,39 @@ def build_fund(cards: list[dict], *, now_ts: int, out_dir: str, workers: int = 8
         if any(w in holding for w in failed) or len(failed) > 3:
             log(f"  ! fund: {len(failed)} whales unreadable; this window is replayed next run")
             fills, until = [], start
+        # Each market's own fee, and the buy orders behind every bet that may be open at the end of the window
+        # (owner, 5 Oct: "what will actually happen in real markets" - no fee estimate, no quoted-price marks).
+        buys = [r for r in fills if r.get("side") == "BUY" and r["wallet"] in signal]
+        new_conds = {r.get("conditionId") or "" for r in buys if int(r["timestamp"]) >= FEE_SWITCH_TS
+                     and not is_combo(r.get("conditionId") or "", r.get("outcome") or "", r.get("title") or "")}
+        new_conds.discard("")
+        rates = _fee_schedules(sorted(new_conds | {p["condition"] for f in state["funds"].values() for p in f["open"]}))
+        missing = new_conds - set(rates)
+        if missing and until > start:
+            state["fee_stalls"] = state.get("fee_stalls", 0) + 1
+            if state["fee_stalls"] <= 3:
+                log(f"  ! fund: the fee rule of {len(missing)} markets could not be read; this window is replayed next run")
+                fills, until = [], start
+            else:
+                log(f"  ! fund: fee rule still unread for {len(missing)} markets after 3 runs; "
+                    "those copies keep the 5% estimate (flagged fee_est)")
+                state["fee_stalls"] = 0
+        else:
+            state["fee_stalls"] = 0
+        for f in state["funds"].values():
+            for p in f["open"]:
+                if p.get("fee_rate") is None and p["condition"] in rates:
+                    p["fee_rate"] = rates[p["condition"]]
+        books = _books_now(sorted({p["token"] for f in state["funds"].values() for p in f["open"]}
+                                  | {str(r.get("asset") or "") for r in buys}))
+        state.setdefault("valued_from", now_ts)
         moved = until > start
         if moved:
             state["cursor"] = until
         signals, settled = _replay(state, fills, signal, state["cursor"], now_ts,
                                    _Lookups(_clob_market), _Lookups(_closed_at),
-                                   _Lookups(_price_later), workers)
+                                   _Lookups(_price_later), workers, fee_rates=rates,
+                                   sell_value=lambda p: _sell_now(p, books))
         if moved and whales_now:        # an empty list means a broken board, not "follow no one"
             state["whales"] = whales_now
         state["last_run"] = {"at": now_ts, "from": start, "to": state["cursor"], "fills": len(fills),

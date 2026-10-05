@@ -907,8 +907,14 @@ export function initFund(ctx) {
     }
     const groups = [
       ['Whale\'s price — the best case', 'A, B and C buy and sell at the whale\'s own price, in the same second: '
-        + 'what a perfect copy would make. Their fees are a flat 5% estimate and their open bets are valued at the '
-        + 'quoted price; D to H use each market\'s real fee and what open bets would sell for right now.',
+        + 'what a perfect copy would make. '
+        + (F.fee_basis?.valued_from
+          ? `From ${niceDate(istDay(F.fee_basis.switch))} ${istClock(F.fee_basis.switch)} IST every new copy and sale `
+            + 'pays its market\'s own Polymarket fee, and open bets are valued at what they would sell for right now '
+            + `(since ${istClock(F.fee_basis.valued_from)} IST). Trades booked before then kept the flat 5% fee `
+            + 'estimate: redoing them would change the cash, and so which later bets were affordable.'
+          : 'Their fees are a flat 5% estimate and their open bets are valued at the quoted price; D to H use each '
+            + 'market\'s real fee and what open bets would sell for right now.'),
       Object.entries(funds).filter(([, x]) => !x.twin)],
       ['Real prices — what a copy really gets', 'D, E and F use A\'s, B\'s and C\'s rules on the signals our server\'s '
         + 'recorder caught, priced from the live order book the moment it heard the whale\'s trade (about 0.1–0.2 s '

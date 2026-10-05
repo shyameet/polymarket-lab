@@ -402,6 +402,13 @@ class Run(unittest.TestCase):
              {'wallet': W2, 'name': 'two', 'verdict': 'CANDIDATE'},
              {'wallet': OUTSIDER, 'name': 'nope', 'verdict': 'RISKY'}]
 
+    def setUp(self):
+        # the fee rules and order books are network reads: no test touches the network
+        for name, fake in (('_fee_schedules', lambda conds: {}), ('_books_now', lambda toks: {})):
+            p = mock.patch.object(fund, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
     def test_first_run_opens_the_funds_without_touching_the_network(self):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(fund, '_activity', side_effect=AssertionError('no fetch on day one')):
@@ -522,6 +529,73 @@ class Run(unittest.TestCase):
         self.assertEqual(after['cursor'], T + 50)
         self.assertEqual([w['wallet'] for w in after['whales']], [W1, W2])
         self.assertEqual(len(after['funds']['A']['points']), 2)        # still marked and recorded
+
+
+# owner, 2026-10-05: real fees and what an open bet would really sell for, from FEE_SWITCH_TS
+S = fund.FEE_SWITCH_TS + 3600
+
+
+def fresh_after_switch():
+    return new_state(S - 3600, [{'wallet': W1, 'name': 'one'}, {'wallet': W2, 'name': 'two'}])
+
+
+class RealFees(unittest.TestCase):
+    def test_a_copy_after_the_switch_pays_its_markets_own_fee(self):
+        for rate in (0.0, 0.04, 0.07):
+            st = fresh_after_switch()
+            step(st, [fill(S, 'BUY', 250, .4)], SIG, Markets(end_ts=S + 3600), no_late, fee_rates={COND: rate})
+            p = st['funds']['A']['open'][0]
+            self.assertAlmostEqual(p['fee'], rate * (STAKE / .4) * .4 * .6)
+            self.assertEqual(p['fee_rate'], rate)
+            self.assertAlmostEqual(st['funds']['A']['cash'], START_CASH - STAKE - p['fee'])
+
+    def test_a_copy_before_the_switch_keeps_the_estimate_it_was_booked_with(self):
+        st = fresh()
+        step(st, [fill(T, 'BUY', 250, .4)], SIG, Markets(), no_late, fee_rates={COND: 0.0})
+        p = st['funds']['A']['open'][0]
+        self.assertAlmostEqual(p['fee'], fee(STAKE / .4, .4))
+        self.assertNotIn('fee_rate', p)
+
+    def test_a_market_whose_fee_rule_is_unknown_keeps_the_estimate_and_says_so(self):
+        st = fresh_after_switch()
+        step(st, [fill(S, 'BUY', 250, .4)], SIG, Markets(end_ts=S + 3600), no_late, fee_rates={})
+        p = st['funds']['A']['open'][0]
+        self.assertAlmostEqual(p['fee'], fee(STAKE / .4, .4))
+        self.assertTrue(p['fee_est'])
+
+    def test_a_sale_after_the_switch_pays_the_markets_fee(self):
+        st = fresh_after_switch()
+        step(st, [fill(S, 'BUY', 250, .4), fill(S + 60, 'SELL', 250, .5)], SIG, Markets(end_ts=S + 3600), no_late,
+             fee_rates={COND: 0.0})
+        c = st['funds']['A']['closed'][0]
+        self.assertAlmostEqual(c['pnl'], (STAKE / .4) * .5 - STAKE)      # no fee either way in a fee-free market
+
+    def test_an_open_bet_is_valued_at_what_it_would_sell_for(self):
+        st = fresh_after_switch()
+        m = Markets(end_ts=S + 3600)
+        step(st, [fill(S, 'BUY', 250, .4)], SIG, m, no_late, fee_rates={COND: 0.05})
+        p = st['funds']['A']['open'][0]
+        books = {'T1': [[.45, 10.0], [.44, 1000.0]]}                   # quoted .5, but buyers pay .45 / .44
+        settle_and_mark(st, m, S + 100, sell_value=lambda q: fund._sell_now(q, books))
+        sh = STAKE / .4
+        want = 10 * .45 - fee(10, .45, .05) + (sh - 10) * .44 - fee(sh - 10, .44, .05)
+        self.assertAlmostEqual(p['mark'] * sh, want)
+        self.assertEqual(p['quoted'], .5)
+        self.assertAlmostEqual(st['funds']['A']['points'][-1][1], st['funds']['A']['cash'] + want, places=3)
+
+    def test_no_buyers_count_zero_and_an_unread_book_keeps_a_recent_value(self):
+        st = fresh_after_switch()
+        m = Markets(end_ts=S + 3600)
+        step(st, [fill(S, 'BUY', 250, .4)], SIG, m, no_late, fee_rates={COND: 0.0})
+        p = st['funds']['A']['open'][0]
+        settle_and_mark(st, m, S + 100, sell_value=lambda q: fund._sell_now(q, {'T1': []}))
+        self.assertEqual(p['mark'], 0.0)                                 # nobody bidding: $0 until it settles
+        settle_and_mark(st, m, S + 200, sell_value=lambda q: fund._sell_now(q, {'T1': [[.5, 1000.0]]}))
+        self.assertAlmostEqual(p['mark'], .5)
+        settle_and_mark(st, m, S + 300, sell_value=lambda q: None)        # book not readable: the last value stays
+        self.assertAlmostEqual(p['mark'], .5)
+        settle_and_mark(st, m, S + 200 + fund.BOOK_KEEP_S + 1, sell_value=lambda q: None)
+        self.assertEqual(p['mark'], 0.0)                                 # ...but not for ever
 
 
 if __name__ == '__main__':
