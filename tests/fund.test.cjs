@@ -107,3 +107,12 @@ test('days roll up into Monday-first weeks, each week changed from the last',asy
   assert.equal(w[1].change,8);
   assert.equal(w[0].change,-5);
 });
+
+test('the real-price funds join the paper funds from their own file, in either shape',async()=>{
+  const {withD}=await ready;
+  const abc={A:{name:'a'},B:{name:'b'},C:{name:'c'}};
+  assert.deepEqual(Object.keys(withD(abc,null)),['A','B','C']);                       // no file: the page as it was
+  assert.deepEqual(Object.keys(withD(abc,{fund:{twin:{}}})),['A','B','C','D']);        // a file from before E and F
+  assert.deepEqual(Object.keys(withD(abc,{fund:{twin:{}},funds:{D:{},E:{},F:{}}})),['A','B','C','D','E','F']);
+  assert.equal(abc.D,undefined);                                                       // the paper funds are not touched
+});

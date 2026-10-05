@@ -429,6 +429,8 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 .fd-sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
 .fd-sw.dash{background:repeating-linear-gradient(90deg,#5a5852 0 4px,transparent 4px 7px)}
 .fd-sel{font-size:17px;margin:18px 0 4px}
+.fd-group{font-size:15px;margin:16px 0 2px}
+.fd-group-note{margin:0 0 8px}
 .fd-full{border:1px solid var(--gold-line);background:var(--gold-wash);color:var(--fg);
   border-radius:10px;padding:9px 12px}
 .fd-tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);
