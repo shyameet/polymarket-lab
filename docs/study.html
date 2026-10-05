@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whale Signal Study</title>
+<meta name="description" content="Can trades from historically skilled Polymarket wallets be copied for profit after real costs? The research plan, the data we can and cannot get, and the first experiment.">
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="style.css?v=20261005j">
+<link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
+<link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
+<style>
+  .doc{max-width:var(--wrap);margin:0 auto;padding:4px var(--gutter) 48px;line-height:1.6;font-size:15.5px}
+  .doc h2{font-size:19px;margin:30px 0 8px;letter-spacing:-.01em}
+  .doc h3{font-size:16px;margin:20px 0 6px}
+  .doc p,.doc li{color:var(--fg)}
+  .doc .mut{color:var(--dim)}
+  .doc ol,.doc ul{padding-left:22px;margin:6px 0}
+  .doc li{margin:4px 0}
+  .doc code{font-family:var(--mono);font-size:13.5px;background:var(--surface);padding:1px 5px;border-radius:5px}
+  .tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:var(--radius)}
+  .tw table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+  .tw th,.tw td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line-2)}
+  .tw th{color:var(--dim);font-weight:600;background:var(--surface)}
+  .tw tr:last-child td{border-bottom:0}
+  .ok{color:var(--win)} .no{color:var(--loss)} .part{color:var(--orange)}
+  .status{display:inline-block;font-size:12.5px;border:1px solid var(--orange-line);background:var(--orange-wash);
+    color:var(--fg);padding:3px 10px;border-radius:999px;margin:4px 0 2px}
+  .back{color:var(--dim);font-size:14px;text-decoration:none}
+  .back:hover{color:var(--fg)}
+  .layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:10px 0}
+  .layer{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px}
+  .layer b{display:block;margin-bottom:4px}
+  .layer span{color:var(--dim);font-size:14px}
+</style>
+</head>
+<body>
+
+<div class="ivblock">
+  <div class="ivrow">
+    <img src="brand/logo.png?v=20260923c" alt="Indra Quant" class="ivlogo">
+    <img src="brand/wordmark.png?v=20260923c" alt="Indra Quant" class="ivword">
+  </div>
+  <div class="ivrule"></div>
+</div>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo">🐋</span>
+    <h1>Whale Signal Study</h1>
+  </div>
+  <a class="back" href="./">← Whale Lab</a>
+</header>
+
+<main class="doc">
+  <span class="status">Step 1 of the study: the data check and the plan · 5 Oct 2026 · nothing has been tested yet</span>
+
+  <h2>The question</h2>
+  <p>Can trades from Polymarket wallets that were skilled <em>at the time</em> be used as a trading signal that
+    still makes money after everything a real copier pays: the delay, the spread, the slippage, thin order books
+    and the fees?</p>
+  <p class="mut">Ground rules: wallets are chosen only from what was known at each date (no picking today's winners
+    and replaying their past). Rules are fixed before the data that judges them. A rule that changes after the forward
+    test starts becomes a new version; old versions keep their results. Nothing is tuned to make a backtest look
+    good, and if the signal does not survive real execution the study says so — a negative result is a result.
+    Every number is labelled with how it was priced: <b>measured</b> (our order walked through the real order book),
+    <b>observed</b> (what other traders actually paid on the public record) or <b>whale's price</b> (the best case).</p>
+
+  <h2>What we already know (priors, not conclusions)</h2>
+  <ul>
+    <li><b>Copying costs a lot.</b> Our real-price funds pay 44–53¢ more per $10 copy than the same copies at the
+      whale's price (measured, 4–5 Oct). About 93% of that is the whale's price already being gone when the copy can
+      look — the whale's own order took the cheap shares.</li>
+    <li><b>The trades you can copy at the whale's price are the bad ones.</b> In liquid books where the price
+      did not move, the whales lost $1.14–$1.85 per $10 copy even at their own price (measured, one night).</li>
+    <li><b>Fees are real and uneven.</b> Polymarket charges the order that takes the price 0% (most sports) to
+      7% (crypto) × price × (1 − price), read from the chain.</li>
+    <li><b>An earlier two-week study</b> found no topic or time of day that held up, and only the under-20¢ rule
+      survived — but it priced copies with <em>average</em> costs, so it is background, not evidence.</li>
+  </ul>
+
+  <h2>The data, checked live today</h2>
+  <div class="tw"><table>
+    <tr><th>Source</th><th>What it gives</th><th>How far back</th><th>Limits found</th><th>Used for</th></tr>
+    <tr><td>Polymarket activity (per wallet)</td><td>Every trade, redemption, merge and reward: price, shares, dollars,
+      transaction id, time to the second</td><td class="ok">Back to the wallet's first trade (e.g. a followed whale
+      from 17 Apr 2026)</td><td>500 rows a call and at most 5,000 deep — so it is read in date windows</td>
+      <td>Wallet histories, metrics, who qualified when</td></tr>
+    <tr><td>Polymarket trades (per market)</td><td>Every trade print in a market: who, side, price, shares, time</td>
+      <td class="ok">The whole market</td><td class="part">Newest first only: an old trade in a busy market is reached by
+      paging through everything after it</td><td>What other traders actually paid after a whale (observed)</td></tr>
+    <tr><td>Polygon chain (exchange fill events)</td><td>Every fill with maker and taker, the fee charged and the exact
+      order inside a block</td><td class="ok">Complete</td><td class="part">Free public nodes return ~50 blocks (~100 s) a
+      call; a free keyed node lifts that</td><td>Fees, maker vs taker, exact order, audits</td></tr>
+    <tr><td>Market data (Gamma)</td><td>Question, outcomes, scheduled end, result, close time, fee rule, fee type</td>
+      <td class="ok">Complete</td><td>No official category: we use the fee type (sports, politics, crypto, weather,
+      finance, tech, culture, economics) plus our title rules</td><td>Results, categories, fees</td></tr>
+    <tr><td>Price history (CLOB)</td><td>The market price minute by minute</td><td class="ok">Verified for May 2026
+      markets</td><td class="part">A quoted price, not something you could have traded at</td>
+      <td>How fast a whale's information reaches the price (+1 min to +24 h)</td></tr>
+    <tr><td>Order books (CLOB)</td><td>The buy and sell orders waiting</td><td class="no">Now only — Polymarket keeps
+      no history of order books</td><td class="no">Past executable prices cannot be read</td><td>Live paper trading</td></tr>
+    <tr><td>Our recorder (VPS)</td><td>The real order book read 0, 1, 2, 5, 15 and 60 s after every signal of the 178
+      followed whales; 15 price levels a side</td><td class="part">Since 4 Oct 2026 22:35 IST, ~750 signals a day</td>
+      <td class="part">Followed whales only; up to 60 s; 15 levels may not cover $500–$1,000</td>
+      <td>The only <b>measured</b> copy prices</td></tr>
+    <tr><td>Leaderboard and wallet P&amp;L</td><td>Today's ranking and equity curves</td><td>—</td><td class="no">Only
+      today's survivors; curves do not start at zero and are sometimes flat copies</td><td>A cross-check, never the
+      wallet pool</td></tr>
+  </table></div>
+
+  <h2>Limits, plainly</h2>
+  <ol>
+    <li><b>No historical order books exist.</b> For any trade before 4 Oct 2026 we cannot measure what our order would
+      have filled at. We can show the whale's price (best case), what other traders actually paid after the delay
+      (observed — a real trade, but someone else's, only when one happened, at their size) and the minute-by-minute
+      price. Decisions are taken only on <b>measured</b> fills; the rest is shown, labelled.</li>
+    <li><b>Measured fills cover only the followed whales</b>, who were picked with today's scores — a survivor list.
+      The study adds wallets found without hindsight as a control.</li>
+    <li><b>Delays past 60 s and orders past 15 book levels are not recorded yet</b> (fix below).</li>
+    <li><b>Some exits are not sales</b>: merging both sides, conversions in linked markets, transfers. A redemption
+      after the result is fine. Exits that cannot be seen are flagged, never invented.</li>
+    <li><b>One person can run many wallets.</b> "Independent" whales agreeing must pass a coordination check (same
+      second, same funding source); it is a heuristic and is flagged as one.</li>
+    <li><b>Times are to the second</b> in the APIs; only the chain gives the exact order inside a block.</li>
+    <li><b>Rate limits</b> (about 10 calls a second to the order-book service, 5 to market data) make the first data
+      pull take hours, not minutes. Raw data is saved once and never fetched twice.</li>
+  </ol>
+
+  <h2>How it will be built</h2>
+  <div class="layers">
+    <div class="layer"><b>1 · Raw</b><span>Exactly what each source returned, never edited. Every file records its
+      address, parameters, time fetched and a checksum.</span></div>
+    <div class="layer"><b>2 · Processed</b><span>Cleaned and joined tables: fills, markets, wallet positions, price
+      paths, trade prints, recorded order books.</span></div>
+    <div class="layer"><b>3 · Research</b><span>Who qualified when, the signals with their features, every simulated
+      copy, and each strategy's results — tagged with the data and code version.</span></div>
+  </div>
+  <h3>The main tables</h3>
+  <div class="tw"><table>
+    <tr><th>Table</th><th>One row per</th><th>Key columns</th></tr>
+    <tr><td><code>fills</code></td><td>wallet trade</td><td>wallet, tx, time, market, outcome token, side, price, shares,
+      dollars, type (trade / redeem / merge / conversion)</td></tr>
+    <tr><td><code>markets</code></td><td>market</td><td>condition, tokens, question, category, scheduled end, result,
+      close time, fee rule over time, linked-market flag</td></tr>
+    <tr><td><code>positions</code></td><td>wallet × outcome episode</td><td>entries, exits, exit kind (sold / redeemed
+      / merged / unseen), resolution, P&amp;L, held time</td></tr>
+    <tr><td><code>wallet_asof</code></td><td>wallet × date</td><td>metrics using only earlier data (settled markets, ROI,
+      win rate, drawdown, concentration, category mix, maker share…), qualified yes/no, quality score</td></tr>
+    <tr><td><code>signals</code></td><td>qualified whale entry</td><td>price bucket, conviction (size ÷ wallet's median),
+      category, wallet's edge in that category so far, other qualified whales on the same outcome within 1 min … 24 h</td></tr>
+    <tr><td><code>copies</code></td><td>signal × delay × size × price source</td><td>our price (measured / observed /
+      whale's), fill share, fees, exit, P&amp;L, "could not be reproduced" reason</td></tr>
+    <tr><td><code>strategies</code></td><td>strategy version</td><td>frozen rule text, start date, results by period</td></tr>
+  </table></div>
+
+  <h2>The first experiment (MVP) — proposed</h2>
+  <ul>
+    <li><b>Wallets (40):</b> 20 from our followed list (marked as hindsight-picked) + 20 found blind — the
+      biggest traders in a random sample of markets in June 2026, chosen before looking at what they did next — and a
+      random-wallet control.</li>
+    <li><b>Periods:</b> develop on June–July 2026, choose rules on August, test the frozen rules once on September,
+      and keep testing forward on the recorder from October.</li>
+    <li><b>Who counts as a whale</b> is decided each month from earlier months only.</li>
+    <li><b>Copies:</b> at the whale's price; after 30 s, 1 min, 5 min and 10 min from what traders actually paid and
+      from the minute price; $10, $25 and $100 measured from the recorder wherever its books reach.</li>
+    <li><b>Tests:</b> the ten price buckets (is the under-20¢ effect real out of sample?), conviction, category,
+      2+ and 3+ whales agreeing, and how fast the price moves after a whale.</li>
+    <li><b>Report:</b> the ten questions of the brief, each answer marked measured / observed / whale's price, with
+      bootstrap ranges and "remove the best 1, 3, 5, 10 trades / the best wallet" checks.</li>
+  </ul>
+  <p class="mut">Not built until the experiment shows the pipeline works: the dashboard and the live paper-trading
+    engine.</p>
+
+  <h2>One change that makes the forward test measure what the brief asks</h2>
+  <p>The recorder can also read the order book 5 and 10 minutes after each whale trade, keep 50 price levels instead
+    of 15 (so $250–$1,000 orders can be walked), and price $10 to $1,000 orders from the same read. Measured fills at
+    every delay and size would then build up every day. This needs one install on the VPS.</p>
+
+  <h2>Decisions needed before the experiment runs</h2>
+  <ol>
+    <li>Show pre-October delay results from <b>observed</b> trades (clearly labelled) while deciding only on
+      <b>measured</b> fills?</li>
+    <li>The wallet pool: 20 followed + 20 found blind + a random control?</li>
+    <li>The periods: June–July / August / September 2026, then forward from October?</li>
+    <li>The recorder upgrade (5 and 10 minutes, deeper books, $10–$1,000) on the VPS?</li>
+  </ol>
+  <p class="tiny">Paper research only. Nothing on this page places, or will place, an order.</p>
+</main>
+</body>
+</html>
