@@ -1836,12 +1836,12 @@ $('#show-screened').addEventListener('click', () => {
   state.watchOnly=false; $('#watch-only').checked=false;
   lsSet('whaleWatchOnly.v1','false'); refreshWatchlist();
 });
-import('./recap.js?v=20260924a').then(({initRecap}) => {
+import('./recap.js?v=20261105a').then(({initRecap}) => {
   state.recapUI = initRecap({state, el, displayName, money, ago, snapshotJSON, relayURL: relayUrl,
     marketLink, copyMarketBtn, openDrawer, CAT_LABEL});
   if (state.view === 'recap') { state.recapUI.render(); state.recapUI.tick(); }
 }).catch(() => { $('#recap-root').textContent = 'The recap could not load. Reload to retry.'; });
-import('./fund.js?v=20261005l').then(({initFund}) => {
+import('./fund.js?v=20261105a').then(({initFund}) => {
   state.fundUI = initFund({state, el, displayName, ago, snapshotJSON, marketLink, copyMarketBtn,
     openDrawer, CAT_LABEL, relayURL: relayUrl, categorize: categorizeClient});
   if (state.view === 'fund') { state.fundUI.render(); state.fundUI.tick(); }

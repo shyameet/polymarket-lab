@@ -71,8 +71,8 @@ STAKE_USD = 100.0
 FEE_RATE = 0.05           # the middle of Polymarket's category rates, as in paper.py
 DECIDED = 0.99            # a price this close to 1 (or to 0) is decided, pending settlement
 SOLD_OUT = 0.02           # holding less than 2% of what was bought = fully sold
-PAGE = 500                # /activity caps limit at 500 ...
-MAX_OFFSET = 5000         # ... and offset at 5000 (HTTP 400 beyond, verified 2026-09-23)
+PAGE = 500                # /v2/activity returns at most 500 rows a page ...
+MAX_PAGES = 40            # ... newest first, by cursor; a window this deep is cut and reported
 
 
 def ist_day(ts: int) -> str:
@@ -238,14 +238,18 @@ def summarise(rows: list[dict]) -> dict:
 # ─────────────────────────── fetching ───────────────────────────────────────
 
 def _activity(wallet: str, start: int, end: int) -> tuple[list[dict], bool]:
-    """Every activity row in [start, end]. True second value = hit the offset cap."""
+    """Every activity row in [start, end], under the v1 field names. True second value = hit the page cap."""
     rows: list[dict] = []
-    for offset in range(0, MAX_OFFSET + 1, PAGE):
-        page = api._get(api.DATA, "/activity", {"user": wallet, "limit": PAGE, "offset": offset,
-                                                "start": start, "end": end})
-        page = page if isinstance(page, list) else (page.get("data") or [])
-        rows.extend(page)
-        if len(page) < PAGE:
+    cursor = None
+    for _ in range(MAX_PAGES):
+        params = {"user": wallet, "limit": PAGE, "start": start, "end": end}
+        if cursor:
+            params["cursor"] = cursor
+        body = api._get(api.DATA, "/v2/activity", params)
+        rows.extend(api.v1_row(r) for r in body.get("data") or [])
+        more = body.get("pagination") or {}
+        cursor = more.get("next_cursor")
+        if not more.get("has_more") or not cursor:
             return rows, False
     return rows, True
 

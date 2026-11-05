@@ -68,6 +68,11 @@ export function newSince(rows, since, minUsd = 100) {
   return { entries: done(groups.BUY), exits: done(groups.SELL) };
 }
 
+/** /v2/activity rows under the v1 names newSince reads (Data API v1 was retired in November 2026). */
+export function v2Rows(body) {
+  return (body?.data || []).map((r) => ({ ...r, asset: r.token_id, conditionId: r.condition_id, usdcSize: r.usdc_size }));
+}
+
 /** Relay REST URL. The nonce misses the upstream 5-minute CDN cache (see live.js). */
 export function relayURLFor(relay, host, path, params, now = Date.now()) {
   const u = new URL(`${relay.replace(/\/+$/, '')}/api/${host}${path}`);
@@ -146,9 +151,9 @@ export function initRecap(ctx) {
       while (queue.length) {
         const c = queue.shift();
         try {
-          const rows = await get('data', '/activity',
+          const rows = await get('data', '/v2/activity',
             { user: c.wallet, limit: 500, type: 'TRADE', start: since + 1, end: until });
-          const g = newSince(Array.isArray(rows) ? rows : [], since);
+          const g = newSince(v2Rows(rows), since);
           for (const k of ['entries', 'exits']) {
             for (const x of g[k]) found[k].push({ ...x, wallet: c.wallet, name: c.name });
           }

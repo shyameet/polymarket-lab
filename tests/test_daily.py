@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'pipeline'))
 from pm import daily
@@ -126,6 +127,46 @@ class Summary(unittest.TestCase):
         self.assertAlmostEqual(s['baseline'], .7)
         self.assertAlmostEqual(s['copy_pnl_closed'], -40)
         self.assertAlmostEqual(s['copy_pnl_open'], 5)
+
+
+class ActivityV2(unittest.TestCase):
+    """Data API v1 was retired in November 2026: /v2/activity, cursor paged, renamed at the door."""
+
+    ROW = {'proxy_wallet': '0xw', 'timestamp': 100, 'condition_id': '0xc', 'type': 'TRADE', 'size': 165.33,
+           'usdc_size': 117.84764, 'transaction_hash': '0xt', 'price': .70235, 'token_id': 'T1', 'side': 'BUY',
+           'outcome_index': 0, 'title': 'A', 'slug': 'a', 'event_slug': 'e', 'name': 'whale'}
+
+    def test_rows_arrive_under_the_v1_names_and_every_page_is_read(self):
+        pages = [{'data': [self.ROW], 'pagination': {'has_more': True, 'next_cursor': 'abc'}},
+                 {'data': [self.ROW], 'pagination': {'has_more': False, 'next_cursor': None}}]
+        calls = []
+
+        def fake(base, path, params):
+            calls.append((path, dict(params)))
+            return pages[len(calls) - 1]
+
+        with mock.patch.object(daily.api, '_get', fake):
+            rows, cut = daily._activity('0xw', 50, 150)
+        self.assertFalse(cut)
+        self.assertEqual(len(rows), 2)
+        for key, want in (('asset', 'T1'), ('conditionId', '0xc'), ('usdcSize', 117.84764),
+                          ('transactionHash', '0xt'), ('proxyWallet', '0xw')):
+            self.assertEqual(rows[0][key], want)
+        self.assertEqual(calls[0][0], '/v2/activity')
+        self.assertEqual((calls[0][1]['start'], calls[0][1]['end']), (50, 150))
+        self.assertNotIn('cursor', calls[0][1])
+        self.assertEqual(calls[1][1]['cursor'], 'abc')
+        self.assertEqual((calls[1][1]['start'], calls[1][1]['end']), (50, 150))    # the window on every page
+
+    def test_a_window_past_the_page_cap_says_so(self):
+        full = {'data': [self.ROW], 'pagination': {'has_more': True, 'next_cursor': 'more'}}
+        with mock.patch.object(daily.api, '_get', lambda *a: full):
+            rows, cut = daily._activity('0xw', 50, 150)
+        self.assertTrue(cut)
+        self.assertEqual(len(rows), daily.MAX_PAGES)
+
+    def test_the_whitelist_accepts_the_date_window(self):
+        self.assertLessEqual({'user', 'limit', 'start', 'end', 'cursor'}, daily.api._ALLOWED['/v2/activity'])
 
 
 if __name__ == '__main__':

@@ -8,6 +8,17 @@ const ready=import('data:text/javascript;base64,'+Buffer.from(code).toString('ba
 // 2026-09-23 00:00 IST = 2026-09-22 18:30 UTC -- the same instant test_fund.py uses
 const MIDNIGHT=1790101800;
 
+test('a /v2/activity row reads like the v1 rows the page was written for',async()=>{
+  const {v2Rows,pendingMoves}=await ready;
+  const rows=v2Rows({data:[{type:'TRADE',timestamp:MIDNIGHT+60,side:'BUY',size:250,usdc_size:100,price:.4,token_id:'T1',
+    condition_id:'0x'+'a'.repeat(64),outcome:'Yes',title:'A market',slug:'a-market'}]});
+  assert.equal(rows[0].asset,'T1');
+  assert.equal(rows[0].conditionId,'0x'+'a'.repeat(64));
+  assert.equal(pendingMoves(rows.map((r)=>({...r,wallet:'0x1'})),MIDNIGHT).signals.length,1);
+  assert.deepEqual(v2Rows({data:[]}),[]);
+  assert.deepEqual(v2Rows(null),[]);
+});
+
 test('India midnight is found from any moment of the day',async()=>{
   const {istMidnight}=await ready;
   assert.equal(istMidnight(MIDNIGHT),MIDNIGHT);

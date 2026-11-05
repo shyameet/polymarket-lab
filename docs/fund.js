@@ -30,6 +30,11 @@ export function relayURLFor(relay, host, path, params, nowMs = Date.now()) {
   return u.href;
 }
 
+/** /v2/activity rows under the v1 names the page reads (Data API v1 was retired in November 2026). */
+export function v2Rows(body) {
+  return (body?.data || []).map((r) => ({ ...r, asset: r.token_id, conditionId: r.condition_id, usdcSize: r.usdc_size }));
+}
+
 /** Whale fills after `since` -> what the next update will most likely book, by the
  *  fund's own rules. rows: /activity rows with `wallet` and `name` added.
  *  held: token -> fund codes already holding it. copying: `${wallet}|${token}` ->
@@ -226,9 +231,9 @@ export function initFund(ctx) {
       while (queue.length) {
         const [wallet, name] = queue.shift();
         try {
-          const page = await get('data', '/activity',
+          const page = await get('data', '/v2/activity',
             { user: wallet, limit: 500, type: 'TRADE', start: since + 1, end: until });
-          for (const r of Array.isArray(page) ? page : []) rows.push({ ...r, wallet, name: name || r.name || '' });
+          for (const r of v2Rows(page)) rows.push({ ...r, wallet, name: name || r.name || '' });
         } catch { failed += 1; }
       }
     }));
@@ -902,6 +907,12 @@ export function initFund(ctx) {
       return;
     }
     root.append(statusLine(F));
+    // D to I live on the server's recorder: never let a fresh update time hide that it stopped
+    if (R.d?.last && now() - R.d.last > 6 * 3600) {
+      root.append(el('p', 'hint fd-full', 'The recorder on our server has stopped: the newest whale trade D to I have seen '
+        + `is from ${niceDate(istDay(R.d.last))} ${istClock(R.d.last)} IST. They take no new copies until it runs again; `
+        + 'bets they already hold are still valued and settled.'));
+    }
     const funds = all();
     // the fair test first (H: one card holding both books), then the two kinds of fund, each in its own row
     const pairs = Object.entries(funds).filter(([, x]) => x.pair && x.twin);

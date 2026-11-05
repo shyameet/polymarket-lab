@@ -78,24 +78,20 @@ def categorize(title: str, slug: str = "") -> str:
 
 
 def _recent_trades(wallet: str, limit: int = PER_WALLET) -> list[dict]:
-    """Recent fills for one wallet, via the v1 /trades endpoint.
+    """Recent fills for one wallet, via /v2/trades (v1 was retired in November 2026).
 
-    v1 is used on purpose: its payload is camelCase and field-for-field
-    IDENTICAL to the websocket activity payload (proxyWallet / side / size /
-    price / outcome / title / slug / timestamp / transactionHash), so the page
-    parses live messages and this file with the same code.
-
-    Both v1 and v2 are CDN-cached `max-age=300`, so there is no freshness to be
-    gained from v2 here -- the earlier belief that v2 was uncached was a header
-    misread (Cloudflare says DYNAMIC while CloudFront is the layer that caches).
+    Rows are renamed to the v1 names, which are field-for-field the websocket
+    activity payload (proxyWallet / side / size / price / outcome / title / slug /
+    timestamp / transactionHash), so the page parses live messages and this file
+    with the same code.
     """
     try:
-        rows = api._get(api.DATA, "/trades",
-                        {"user": wallet, "limit": limit, "takerOnly": "false"})
+        body = api._get(api.DATA, "/v2/trades",
+                        {"user": wallet, "limit": limit, "taker_only": False})
     except api.PolymarketError as e:
         print(f"  ! trades {wallet}: {e}", file=sys.stderr)
         return []
-    return rows if isinstance(rows, list) else (rows.get("data") or [])
+    return [api.v1_row(r) for r in body.get("data") or []]
 
 
 def _end_dates(conditions: set[str], *, log) -> dict[str, str]:

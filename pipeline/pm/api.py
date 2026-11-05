@@ -54,18 +54,26 @@ _ALLOWED: dict[str, set[str]] = {
         # keyed on RECENT activity rather than cumulative standing.
         "filter_type", "filter_amount",
     },
-    "/v2/activity": {"user", "limit", "cursor", "sort_by", "sort_direction", "type"},
+    # start/end (unix seconds) filter; start_ts/end_ts are silently ignored (verified 2026-11-05).
+    "/v2/activity": {"user", "limit", "cursor", "sort_by", "sort_direction", "type", "start", "end"},
     "/v2/holders": {"condition", "limit", "include_pnl", "min_balance", "cursor"},
-    # v1 -- camelCase params, offset paging. Kept because its payload is
-    # field-identical to the websocket activity payload.
-    "/trades": {"user", "market", "limit", "offset", "takerOnly", "side",
-                "filterType", "filterAmount"},
-    # v1 activity, for the daily recap. Verified live 2026-09-23: start/end (unix
-    # seconds) and type genuinely filter; limit is clamped to 500; an offset past
-    # 5000 is refused with HTTP 400 ("max historical activity offset").
-    "/activity": {"user", "limit", "offset", "start", "end", "type", "side",
-                  "sortBy", "sortDirection", "market"},
 }
+
+
+# Data API v1 (/trades, /activity, /positions...) was retired around 2026-11-03: every call answers HTTP 410
+# "Data API v1 has been retired". v2 holds the same rows under snake_case names and token_id for asset. Everything
+# downstream (the funds, the recap, the feed, the page's parser) reads the v1 names, which also match the websocket
+# payload, so a row is renamed at the door. Verified 2026-11-05: same fills, same prices, and usdc_size includes the
+# fee exactly as usdcSize did (tx 0x73ecc2d2: 165.33 shares at 0.70235, $117.85), so the funds' $100 rule is unchanged.
+_V1_NAMES = {"proxy_wallet": "proxyWallet", "condition_id": "conditionId", "token_id": "asset",
+             "transaction_hash": "transactionHash", "usdc_size": "usdcSize", "outcome_index": "outcomeIndex",
+             "event_slug": "eventSlug", "profile_image": "profileImage",
+             "profile_image_optimized": "profileImageOptimized"}
+
+
+def v1_row(row: dict) -> dict:
+    """A v2 trade/activity row under the v1 field names the rest of the code reads."""
+    return {_V1_NAMES.get(k, k): v for k, v in row.items()}
 
 
 class PolymarketError(RuntimeError):
