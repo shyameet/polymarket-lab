@@ -1738,13 +1738,13 @@ function renderMethod() {
 
 /* ───────────────────────────── wiring ───────────────────────────────── */
 
-const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research', 'recap', 'fund'];
+const VIEWS = ['whales', 'trades', 'positions', 'mine', 'soon', 'flows', 'research', 'recap', 'fund', 'news'];
 // Seven views grouped into four sections. Closing soon is the default landing:
 // it's the owner's stated main use, and it's always populated, where the live
 // tape can open on an empty two-minute window.
 const TAB_OF = { soon: 'markets', flows: 'markets', trades: 'live', positions: 'live',
-  whales: 'whales', research: 'whales', recap: 'recap', fund: 'recap', mine: 'mine' };
-const lastViewOfTab = { markets: 'soon', live: 'trades', whales: 'whales', recap: 'recap', mine: 'mine' };
+  whales: 'whales', research: 'whales', recap: 'recap', fund: 'recap', mine: 'mine', news: 'news' };
+const lastViewOfTab = { markets: 'soon', news: 'news', live: 'trades', whales: 'whales', recap: 'recap', mine: 'mine' };
 
 function showView(view) {
   if (!TAB_OF[view]) view = 'soon';
@@ -1766,7 +1766,7 @@ function showView(view) {
     b.setAttribute('aria-selected', String(b.dataset.view === view));
   });
   $('#subnav').hidden = subs < 2;
-  $('#follow-toggle').hidden = view === 'flows' || view === 'mine' || view === 'fund';
+  $('#follow-toggle').hidden = view === 'flows' || view === 'mine' || view === 'fund' || view === 'news';
   VIEWS.forEach((v) => { $(`#view-${v}`).hidden = view !== v; });
   if (view === 'trades') { state.dirty = true; state.tapeForce = true; }
   if (view === 'positions') renderPositions();
@@ -1776,6 +1776,7 @@ function showView(view) {
   if (view === 'research') state.research?.render();
   if (view === 'recap') { state.recapUI?.render(); state.recapUI?.tick(); }
   if (view === 'fund') { state.fundUI?.render(); state.fundUI?.tick(); }
+  if (view === 'news') { state.newsUI?.render(); state.newsUI?.tick(); }
   paintFreshness();
   state.liveRefresh?.tick();
 }
@@ -1788,7 +1789,7 @@ document.querySelectorAll('.sub').forEach((b) => b.addEventListener('click', () 
 // One short line with a coloured dot instead of a four-line paragraph; the full
 // caveat stays available as the hover title and in each view's "about" note.
 const SNAPSHOT_VIEWS = { whales: 'Scores', research: 'Topic research', flows: 'Transfers', recap: 'Recap',
-  fund: 'Paper funds' };
+  fund: 'Paper funds', news: 'News board' };
 function paintFreshness() {
   const box = $('#section-freshness');
   if (!box) return;
@@ -1796,7 +1797,7 @@ function paintFreshness() {
   if (SNAPSHOT_VIEWS[state.view]) {
     const ts = { whales: state.meta?.generated_at, research: state.insights?.generated_at,
       flows: state.cryptoFlows?.generated_at, recap: state.recapUI?.generatedAt(),
-      fund: state.fundUI?.generatedAt() }[state.view];
+      fund: state.fundUI?.generatedAt(), news: state.newsUI?.generatedAt() }[state.view];
     const age = ts ? Date.now() / 1000 - ts : Infinity;
     level = age < 1800 ? 'ok' : age < 4 * 3600 ? 'stale' : 'old';
     text = ts ? `${SNAPSHOT_VIEWS[state.view]} updated ${ago(ts)} ago` : 'Loading saved data…';
@@ -1846,6 +1847,10 @@ import('./fund.js?v=20261105a').then(({initFund}) => {
     openDrawer, CAT_LABEL, relayURL: relayUrl, categorize: categorizeClient});
   if (state.view === 'fund') { state.fundUI.render(); state.fundUI.tick(); }
 }).catch(() => { $('#fund-root').textContent = 'The paper funds could not load. Reload to retry.'; });
+import('./news.js?v=20261110a').then(({initNews}) => {
+  state.newsUI = initNews({state, el, displayName, money, snapshotJSON, marketLink, openDrawer});
+  if (state.view === 'news') { state.newsUI.render(); state.newsUI.tick(); }
+}).catch(() => { $('#news-root').textContent = 'The news board could not load. Reload to retry.'; });
 import('./research.js?v=20260924a').then(({initResearch}) => {
   state.research = initResearch({state, displayName, money, ago, watchButton, isWatched,
     snapshotJSON, relayURL:relayUrl, showWhale: openDrawer, refresh: () => { if (state.whales.length) renderBoard(); }});
@@ -1965,6 +1970,7 @@ setInterval(() => {
   if (state.view === 'positions') renderPositionStats();
   if (state.view === 'recap') state.recapUI?.tick();
   if (state.view === 'fund') state.fundUI?.tick();
+  if (state.view === 'news') state.newsUI?.tick();
   state.liveRefresh?.tick();
   paintFreshness();
 }, 1000);

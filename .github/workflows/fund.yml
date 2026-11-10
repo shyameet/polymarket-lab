@@ -24,7 +24,7 @@ on:
         default: false
   push:
     branches: [main]
-    paths: ['pipeline/pm/fund.py', '.github/workflows/fund.yml']
+    paths: ['pipeline/pm/fund.py', 'pipeline/pm/news.py', '.github/workflows/fund.yml']
 
 permissions:
   contents: write
@@ -63,17 +63,25 @@ jobs:
         working-directory: pipeline
         run: python -m pm.fund --cards ../docs/data/whales.json --out ../docs/data/fund --workers 8
 
+      # The News tab (pipeline/pm/news.py): scheduled-release markets, their 10 biggest wallets, and the
+      # $1,000 copy of them priced from the real fills after each whale's. Its own files; a failure here
+      # must not stop the funds' commit, so it is allowed to fail.
+      - name: News board and its copy account
+        working-directory: pipeline
+        continue-on-error: true
+        run: python -m pm.news --out ../docs/data/news --workers 6
+
       - name: Commit if changed
         run: |
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add docs/data/fund
+          git add docs/data/fund docs/data/news
           if git diff --staged --quiet; then
             echo 'no change'
             exit 0
           fi
           git commit -m "data: paper funds ($(date -u +%Y-%m-%dT%H:%MZ))"
-          # Only this job writes docs/data/fund, and replays never overlap, so a
+          # Only this job writes docs/data/fund and docs/data/news, and replays never overlap, so a
           # rejected push is a refresh.yml commit to other files: rebase cleanly.
           for attempt in 1 2 3 4 5; do
             if git push; then

@@ -7,7 +7,7 @@
 <meta name="description" content="Follow Polymarket whales: what they're buying, what they're holding, and delayed position-exit observations.">
 <!-- Kept out of search results by the owner's choice (2026-10-03); still open to anyone with the link. -->
 <meta name="robots" content="noindex, nofollow">
-<link rel="stylesheet" href="style.css?v=20261005l">
+<link rel="stylesheet" href="style.css?v=20261110a">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/icon-32.png?v=20260923c">
 <link rel="icon" type="image/svg+xml" href="brand/icon.svg?v=20260923c">
 <link rel="apple-touch-icon" href="brand/icon-180.png?v=20260923c">
@@ -55,12 +55,15 @@
   </p>
 </div>
 
-<!-- Five sections. On phones this becomes a bottom tab bar, so the first
+<!-- Six sections. On phones this becomes a bottom tab bar, so the first
      screen shows data instead of navigation. -->
 <nav class="tabs" role="tablist" aria-label="Sections">
   <button class="tab" data-tab="markets" role="tab" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
     <span>Markets</span></button>
+  <button class="tab" data-tab="news" role="tab" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="14" height="15" rx="1.5"/><path d="M17.5 8.5h3v9a2 2 0 0 1-2 2M7 9h7M7 12.5h7M7 16h4"/></svg>
+    <span>News</span></button>
   <button class="tab" data-tab="live" role="tab" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
     <span>Live</span></button>
@@ -78,6 +81,7 @@
 <div class="subnav" id="subnav" role="tablist" aria-label="Views">
   <button class="sub" data-tab="markets" data-view="soon" role="tab" type="button">Closing soon</button>
   <button class="sub" data-tab="markets" data-view="flows" role="tab" type="button">Crypto flows</button>
+  <button class="sub" data-tab="news" data-view="news" role="tab" type="button">News &amp; whales</button>
   <button class="sub" data-tab="live" data-view="trades" role="tab" type="button">Trades</button>
   <button class="sub" data-tab="live" data-view="positions" role="tab" type="button">Holdings &amp; exits</button>
   <button class="sub" data-tab="whales" data-view="whales" role="tab" type="button">Who to follow</button>
@@ -95,6 +99,10 @@
     <button id="show-screened" class="btn small" type="button" hidden>Show all screened whales</button>
   </span>
 </div>
+
+<section id="view-news" class="view" hidden>
+  <div id="news-root"></div>
+</section>
 
 <section id="view-recap" class="view" hidden>
   <details class="about">
@@ -439,6 +447,6 @@
   <p class="tiny">Public data, research only. No trades are placed and no keys are held.</p>
 </footer>
 
-<script src="app.js?v=20261105a" type="module"></script>
+<script src="app.js?v=20261110a" type="module"></script>
 </body>
 </html>

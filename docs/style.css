@@ -523,3 +523,47 @@ button[aria-pressed="true"]{border-color:var(--gold-line);color:var(--gold)}
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
+
+/* ── News: scheduled releases, their biggest wallets, the $1,000 copy (news.js) ── */
+.nw-h2{font-size:18px;margin:18px 0 8px}
+.nw-list{display:grid;gap:12px}
+.nw-event{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;min-width:0}
+.nw-event.past{opacity:.75}
+.nw-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.nw-when{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.nw-when b{font-family:var(--mono);font-size:14px}
+.nw-count{font-size:13px;color:var(--orange)}
+.nw-title{font-size:16px;margin:8px 0 6px;overflow-wrap:anywhere}
+.nw-title a{color:var(--fg);text-decoration:none}
+.nw-title a:hover{text-decoration:underline}
+.nw-k{display:block;font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
+.nw-fav{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.nw-fav .nw-k{display:inline}
+.nw-fav b{font-size:16px}
+.nw-odds{font-family:var(--mono);font-size:18px;font-weight:750;color:var(--dim)}
+.nw-odds.high{color:var(--win)}
+.nw-bars{display:grid;gap:4px;margin:8px 0 10px}
+.nw-bar{display:grid;grid-template-columns:minmax(80px,180px) 1fr 52px;gap:8px;align-items:center;font-size:13px}
+.nw-lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
+.nw-track{height:6px;background:var(--surface-3);border-radius:3px;overflow:hidden}
+.nw-fill{display:block;height:100%;background:var(--orange)}
+.nw-pc{font-family:var(--mono);text-align:right}
+.nw-moves{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.nw-moves .nw-k{width:100%}
+.nw-chip{font-size:12.5px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;color:var(--fg);white-space:nowrap}
+.nw-chip.major{border-color:var(--orange-line);color:var(--orange)}
+.nw-note{font-size:13px;color:var(--dim);margin:10px 0 6px;line-height:1.5}
+.nw-whales summary{cursor:pointer;font-size:14px;font-weight:600;padding:6px 0}
+.nw-wallet{font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.nw-also{color:var(--faint)}
+.nw-wt td:nth-child(3),.nw-wt th:nth-child(3){text-align:left;font-family:var(--sans);white-space:normal;min-width:170px}
+.nw-more{margin-top:10px}
+.nw-ft td:nth-child(2),.nw-ft th:nth-child(2){text-align:left;font-family:var(--sans);white-space:normal;min-width:200px}
+.nw-fund{margin-top:26px}
+.nw-lead{font-size:14px;color:var(--dim);line-height:1.55;margin:0 0 10px}
+.nw-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:8px}
+.nw-tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;min-width:0}
+.nw-tile b{display:block;font-family:var(--mono);font-size:20px;font-weight:700;margin:3px 0 2px}
+.nw-chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin:10px 0}
+.nw-chart svg{display:block;width:100%;height:120px;overflow:visible}
+@media (max-width:640px){.nw-bar{grid-template-columns:minmax(70px,120px) 1fr 46px}}
